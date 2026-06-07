@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vulnpatch.local/schemas/code_unit.schema.json",
+  "title": "CodeUnit",
+  "description": "Code input unit for analysis",
+  "type": "object",
+  "required": ["id", "path", "language", "content", "start_line"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique identifier for the code unit"
+    },
+    "path": {
+      "type": "string",
+      "description": "File path or identifier for the code unit"
+    },
+    "language": {
+      "type": "string",
+      "description": "Programming language (e.g., python, javascript)"
+    },
+    "content": {
+      "type": "string",
+      "description": "Actual code content"
+    },
+    "start_line": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Starting line number in the original file"
+    },
+    "end_line": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Ending line number in the original file"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Additional metadata",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

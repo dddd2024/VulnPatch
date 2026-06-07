@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vulnpatch.local/schemas/evidence_bundle.schema.json",
+  "title": "EvidenceBundle",
+  "description": "Complete evidence package for a finding",
+  "type": "object",
+  "required": ["id", "finding", "snippets", "agent_hypotheses", "agent_logs"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique identifier for the evidence bundle"
+    },
+    "finding": {
+      "$ref": "raw_finding.schema.json",
+      "description": "The original finding"
+    },
+    "code_unit": {
+      "$ref": "code_unit.schema.json",
+      "description": "The code unit containing the vulnerability"
+    },
+    "snippets": {
+      "type": "array",
+      "description": "Code snippets as evidence",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file_path": {"type": "string"},
+          "start_line": {"type": "integer"},
+          "end_line": {"type": "integer"},
+          "content": {"type": "string"},
+          "vulnerability_start": {"type": "integer"},
+          "vulnerability_end": {"type": "integer"}
+        },
+        "required": ["file_path", "start_line", "end_line", "content"]
+      }
+    },
+    "call_chain": {
+      "type": "array",
+      "description": "Call chain information",
+      "items": {"type": "object"}
+    },
+    "agent_hypotheses": {
+      "type": "array",
+      "description": "Agent hypotheses",
+      "items": {"type": "object"}
+    },
+    "agent_logs": {
+      "type": "array",
+      "description": "Agent execution logs",
+      "items": {"type": "object"}
+    },
+    "judge_decision": {
+      "type": ["object", "null"],
+      "description": "Judge agent decision",
+      "properties": {
+        "id": {"type": "string"},
+        "finding_id": {"type": "string"},
+        "verdict": {"type": "string", "enum": ["confirmed", "suspicious", "rejected"]},
+        "confidence": {"type": "string"},
+        "risk_score": {"type": "number"},
+        "reason": {"type": "string"}
+      },
+      "required": ["id", "finding_id", "verdict", "confidence", "risk_score", "reason"]
+    },
+    "cwe_info": {
+      "type": "object",
+      "description": "CWE classification information"
+    },
+    "score_breakdown": {
+      "type": "object",
+      "description": "Risk score breakdown"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Additional metadata",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

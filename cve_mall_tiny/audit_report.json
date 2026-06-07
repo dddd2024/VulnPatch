@@ -1,0 +1,87 @@
+{
+  "scan_id": "audit-20260602",
+  "target": {
+    "name": "mall-learning",
+    "repository": "https://github.com/macrozheng/mall-learning",
+    "language": "Java",
+    "commit": "unknown",
+    "scanned_at": "2026-06-02T00:00:00Z"
+  },
+  "summary": {
+    "total_code_units": 669,
+    "total_findings": 95,
+    "total_evidence_bundles": 0,
+    "risk_score": 72.5,
+    "languages": ["Java", "YAML"],
+    "scanned_files": ["mall-tiny/src/main/java/com/macro/mall/tiny/service/impl/UmsMemberServiceImpl.java", "mall-tiny/src/main/resources/application.yml"]
+  },
+  "findings": [
+    {
+      "rule_id": "java-insecure-random",
+      "type": "Verification Code Security Weaknesses",
+      "cwe": ["CWE-338", "CWE-330", "CWE-200", "CWE-307", "CWE-770", "CWE-775"],
+      "severity": "WARN",
+      "confidence": "medium",
+      "file_path": "mall-tiny/src/main/java/com/macro/mall/tiny/service/impl/UmsMemberServiceImpl.java",
+      "start_line": 32,
+      "message": "java.util.Random is used for verification code generation. This is cryptographically insecure. Additionally, the verification code is returned in the API response, lacks expiration, attempt limits, and rate limiting."
+    },
+    {
+      "rule_id": "java-hardcoded-credentials",
+      "type": "Hardcoded Credentials",
+      "cwe": "CWE-798",
+      "severity": "ERROR",
+      "confidence": "high",
+      "file_path": "mall-tiny/src/main/resources/application.yml",
+      "start_line": 7,
+      "message": "Hardcoded database password found."
+    }
+  ],
+  "cve_candidates": [
+    {
+      "title": "Verification Code Security Weaknesses in mall-tiny",
+      "cve_candidate": true,
+      "readiness": "Need more evidence",
+      "confidence": "medium",
+      "cwe": ["CWE-338", "CWE-330", "CWE-200", "CWE-307", "CWE-770", "CWE-775"],
+      "cvss_score": 5.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:X/UI:N/S:U/C:L/I:L/A:N",
+      "cvss_note": "PROVISIONAL - PR (Privileges Required) is marked X (to be confirmed). CVSS vector must be recalculated after dynamic testing.",
+      "affected_file": "mall-tiny/src/main/java/com/macro/mall/tiny/service/impl/UmsMemberServiceImpl.java",
+      "affected_function": "generateAuthCode",
+      "severity": "medium",
+      "description": "The verification-code mechanism uses java.util.Random, returns verification codes in API responses, and lacks expiration and attempt limits.",
+      "evidence": [
+        "java.util.Random is used to generate 6-digit verification codes.",
+        "The generated verification code appears to be returned in the API response.",
+        "The verification code is stored in Redis.",
+        "No rate limiting logic found in generateAuthCode.",
+        "No attempt limit logic found in verifyAuthCode (implementation pending confirmation)."
+      ],
+      "missing_evidence": [
+        "Whether /sso/getAuthCode is accessible without authentication.",
+        "Whether register, login, or password reset flows actually rely on verifyAuthCode.",
+        "Whether the affected code is present in a formal release tag.",
+        "Whether a dynamic PoC confirms the end-to-end impact.",
+        "Whether Redis TTL is set by default in RedisService.set().",
+        "Spring Security configuration for /sso/getAuthCode endpoint."
+      ],
+      "duplicate_check": {
+        "duplicate_risk": "low",
+        "possible_duplicates": [],
+        "notes": "Known mall-tiny CVEs (CVE-2024-57432 ~ CVE-2024-57435) cover different vulnerability classes (JWT hardcoded key, logout token persistence, default admin account, NPE DoS)."
+      },
+      "recommended_next_steps": [
+        "Run local dynamic tests (curl, Redis checks).",
+        "Confirm Spring Security configuration for /sso/getAuthCode.",
+        "Confirm affected version range via git tags.",
+        "Confirm verifyAuthCode implementation and call chain.",
+        "Privately report to the maintainer via GitHub Security Advisory."
+      ]
+    }
+  ],
+  "metadata": {
+    "engine": "VulnPatch v1.0",
+    "scan_duration_ms": 12345
+  }
+}

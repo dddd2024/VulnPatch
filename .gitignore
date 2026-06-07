@@ -1,0 +1,74 @@
+.env
+.git.bak/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# VulnPatch outputs
+*.log
+output/
+reports/
+
+# Node (frontend/)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Python cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.dask/
+
+# Files that cannot be indexed by git
+CVE_FIX.patch
+CVE_POC.java
+README_DEPLOY.md
+VULNERABILITY_REPORT.md
+CVE_SUBMISSION.md
+CVE_SUBMISSION_GITHUB.json
+CVE_SUBMISSION_GUIDE.md
+analyzers/javascript/js_pattern_analyzer.py
+analyzers/python/engines/ast_rule_engine.py
+api/routes/auth.py
+audit_core/agent_runtime.py
+frontend/src/components/common/VerificationBadge.vue
+ingest/repo_loader.py
+knowledge/cve_patterns.py
+tests/__init__.py

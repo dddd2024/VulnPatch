@@ -1,0 +1,332 @@
+# VulnPatch 模块边界定义
+# 声明每个模块的职责、输入、输出和禁止行为
+
+modules:
+  audit_core:
+    description: 核心数据模型和编排逻辑
+    owner: Core Orchestrator
+    
+    responsibilities:
+      - 定义统一数据模型
+      - 实现 AuditOrchestrator 主入口
+      - 管理 Analyzer 注册表
+      - 实现结果合并和评分逻辑
+    
+    allowed_inputs:
+      - CodeUnit
+      - RawFinding
+      - AgentHypothesis
+      - EvidenceBundle
+      - 配置文件
+    
+    allowed_outputs:
+      - AuditResult
+      - AuditSummary
+      - RawFinding
+      - EvidenceBundle
+    
+    forbidden_behaviors:
+      - 实现具体检测逻辑
+      - 直接调用 LLM
+      - 直接读取文件系统（ingest 除外）
+    
+    public_contracts:
+      - audit_core/models.py
+      - audit_core/orchestrator.py
+      - audit_core/registry.py
+    
+    dependencies:
+      - ingest
+
+  ingest:
+    description: 输入处理和代码加载
+    owner: Core Orchestrator
+    
+    responsibilities:
+      - 从各种来源加载代码
+      - 语言检测
+      - 构建 CodeUnit 对象
+    
+    allowed_inputs:
+      - 文件路径
+      - 代码字符串
+      - GitHub URL
+    
+    allowed_outputs:
+      - CodeUnit
+    
+    forbidden_behaviors:
+      - 包含分析逻辑
+      - 调用 Analyzers
+      - 调用 Agents
+    
+    public_contracts:
+      - ingest/repo_loader.py
+      - ingest/code_unit_builder.py
+      - ingest/language_router.py
+    
+    dependencies: []
+
+  analyzers:
+    description: 静态分析引擎
+    owner: Analyzer & Taint Engine
+    
+    responsibilities:
+      - 模式匹配分析
+      - AST 分析
+      - 污点流分析
+    
+    allowed_inputs:
+      - CodeUnit
+      - 配置文件
+    
+    allowed_outputs:
+      - RawFinding
+    
+    forbidden_behaviors:
+      - 导入 agents 模块
+      - 导入 llm 模块
+      - 直接调用 LLM API
+      - 直接读取文件系统
+      - 修改 audit_core/models.py
+    
+    public_contracts:
+      - analyzers/base.py
+      - analyzers/pattern_analyzer.py
+    
+    dependencies:
+      - audit_core
+
+  agents:
+    description: LLM 驱动的智能分析 Agent
+    owner: Agent & Knowledge
+    
+    responsibilities:
+      - 初始代码侦察
+      - 漏洞分析和假设生成
+      - 最终裁决和风险评分
+      - 多 Agent 协调
+    
+    allowed_inputs:
+      - CodeUnit
+      - RawFinding
+      - AgentHypothesis
+      - EvidenceBundle
+    
+    allowed_outputs:
+      - AgentHypothesis
+      - AgentLog
+      - JudgeDecision
+    
+    forbidden_behaviors:
+      - 直接读取文件系统
+      - 直接扫描代码库
+      - 修改 audit_core/models.py
+      - 修改 Analyzers
+      - 在 Agent 中实现检测规则
+    
+    public_contracts:
+      - agents/base_agent.py
+      - agents/recon_agent.py
+      - agents/analysis_agent.py
+      - agents/judge_agent.py
+    
+    dependencies:
+      - audit_core
+      - evidence
+      - knowledge
+
+  evidence:
+    description: 证据收集和管理
+    owner: Agent & Knowledge
+    
+    responsibilities:
+      - 代码片段提取
+      - 调用链构建
+      - 置信度记录
+      - 证据包组装
+    
+    allowed_inputs:
+      - CodeUnit
+      - RawFinding
+      - AgentHypothesis
+      - AgentLog
+      - JudgeDecision
+    
+    allowed_outputs:
+      - EvidenceBundle
+      - dict (代码片段信息)
+      - dict (置信度记录)
+    
+    forbidden_behaviors:
+      - 直接读取文件系统
+      - 直接调用 Analyzers
+      - 直接调用 Agents
+      - 修改 audit_core/models.py
+    
+    public_contracts:
+      - evidence/snippet_extractor.py
+      - evidence/evidence_builder.py
+    
+    dependencies:
+      - audit_core
+      - knowledge
+
+  knowledge:
+    description: 知识库和分类
+    owner: Agent & Knowledge
+    
+    responsibilities:
+      - CWE 分类映射
+      - RAG 检索
+      - 漏洞图谱构建
+    
+    allowed_inputs:
+      - 漏洞类型字符串
+      - EvidenceBundle
+      - 查询字符串
+    
+    allowed_outputs:
+      - dict (CWE 信息)
+      - list[dict] (检索结果)
+      - dict (图谱结构)
+    
+    forbidden_behaviors:
+      - 修改 audit_core/models.py
+    
+    public_contracts:
+      - knowledge/cwe_mapper.py
+    
+    dependencies:
+      - audit_core
+
+  report:
+    description: 报告生成
+    owner: API, UI & Report
+    
+    responsibilities:
+      - JSON 报告生成
+      - Markdown 报告生成
+      - HTML 报告生成
+    
+    allowed_inputs:
+      - AuditResult
+    
+    allowed_outputs:
+      - dict (JSON)
+      - str (Markdown)
+      - str (HTML)
+    
+    forbidden_behaviors:
+      - 修改 audit_core/models.py
+    
+    public_contracts:
+      - report/json_report.py
+      - report/markdown_report.py
+      - report/html_report.py
+    
+    dependencies:
+      - audit_core
+
+  api:
+    description: API 路由和请求/响应处理
+    owner: API, UI & Report
+    
+    responsibilities:
+      - 定义 API 路由
+      - 请求验证和序列化
+      - 响应格式化
+      - 错误处理
+    
+    allowed_inputs:
+      - HTTP 请求
+      - JSON 请求体
+      - URL 参数
+    
+    allowed_outputs:
+      - JSON 响应
+      - HTTP 状态码
+    
+    forbidden_behaviors:
+      - 实现检测规则
+      - 直接调用 Analyzers
+      - 直接调用 Agents
+      - 修改 audit_core/models.py
+    
+    public_contracts:
+      - api/schemas.py
+      - api/server.py
+      - api/routes/scan.py
+      - api/routes/findings.py
+      - api/routes/evidence.py
+      - api/routes/agents.py
+      - api/routes/report.py
+    
+    dependencies:
+      - audit_core
+
+# 禁止的跨模块导入
+# 注意：detector 导入限制由 architecture_guard.py 的 check_detector_imports 方法专门处理
+# （仅 analyzers/legacy_adapter.py 允许导入 detector）
+forbidden_imports:
+  analyzers:
+    - agents
+    - llm
+    - patch  # 禁止导入 patch 模块
+  
+  agents:
+    - ingest.repo_loader  # 不能直接扫描
+    - patch  # 禁止导入 patch 模块
+    - detector  # 禁止导入旧 detector pipeline
+  
+  evidence:
+    - patch  # 禁止导入 patch 模块
+    - detector  # 禁止导入旧 detector pipeline
+  
+  report:
+    - patch  # 禁止导入 patch 模块
+    - detector  # 禁止导入旧 detector pipeline
+  
+  api:
+    - analyzers.pattern_analyzer  # 不能直接调用
+    - agents.analysis_agent  # 不能直接调用
+    - analysis_engine  # 禁止导入旧分析引擎
+    - main  # 禁止导入旧 pipeline 入口
+    - patch  # 禁止导入 patch 模块
+    - detector  # 禁止导入旧 detector pipeline
+    - parser  # 禁止导入旧 parser
+  
+  audit_core:
+    - detector  # 禁止导入旧 detector pipeline
+  
+  ingest:
+    - detector  # 禁止导入旧 detector pipeline
+  
+  knowledge:
+    - detector  # 禁止导入旧 detector pipeline
+
+# 数据流向
+data_flow:
+  - source: ingest
+    target: analyzers
+    data: CodeUnit
+  
+  - source: analyzers
+    target: agents
+    data: RawFinding
+  
+  - source: agents
+    target: evidence
+    data: AgentHypothesis, JudgeDecision
+  
+  - source: evidence
+    target: knowledge
+    data: EvidenceBundle
+  
+  - source: knowledge
+    target: report
+    data: Enriched Evidence
+  
+  - source: report
+    target: api
+    data: Formatted Report
