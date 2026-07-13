@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vulnpatch.local/schemas/audit_result.schema.json",
+  "title": "AuditResult",
+  "description": "Complete result of an audit run",
+  "type": "object",
+  "required": ["summary", "findings", "evidence", "agent_logs"],
+  "properties": {
+    "summary": {
+      "type": "object",
+      "description": "Audit summary statistics",
+      "required": ["total_code_units", "total_findings", "total_evidence_bundles", "risk_score", "languages", "scanned_files"],
+      "properties": {
+        "total_code_units": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of code units analyzed"
+        },
+        "total_findings": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of findings"
+        },
+        "total_evidence_bundles": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of evidence bundles"
+        },
+        "risk_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Overall risk score (0-100)"
+        },
+        "languages": {
+          "type": "array",
+          "description": "Languages analyzed",
+          "items": {"type": "string"}
+        },
+        "scanned_files": {
+          "type": "array",
+          "description": "List of scanned file paths",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "findings": {
+      "type": "array",
+      "description": "All findings",
+      "items": {"$ref": "raw_finding.schema.json"}
+    },
+    "evidence": {
+      "type": "array",
+      "description": "Evidence bundles for findings",
+      "items": {"$ref": "evidence_bundle.schema.json"}
+    },
+    "agent_logs": {
+      "type": "array",
+      "description": "Agent execution logs",
+      "items": {"type": "object"}
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Additional metadata",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

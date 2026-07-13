@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vulnpatch.local/schemas/raw_finding.schema.json",
+  "title": "RawFinding",
+  "description": "Raw finding from an analyzer",
+  "type": "object",
+  "required": ["id", "rule_id", "type", "severity", "confidence", "file_path", "start_line", "message", "engine"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique identifier for the finding"
+    },
+    "rule_id": {
+      "type": "string",
+      "description": "Identifier of the rule that triggered this finding"
+    },
+    "type": {
+      "type": "string",
+      "description": "Vulnerability type (e.g., SQL Injection)"
+    },
+    "cwe": {
+      "type": ["string", "null"],
+      "description": "CWE identifier (e.g., CWE-89)"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["CRITICAL", "ERROR", "HIGH", "WARN", "MEDIUM", "INFO", "LOW", "UNKNOWN"],
+      "description": "Severity level"
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["high", "medium", "low"],
+      "description": "Confidence level"
+    },
+    "file_path": {
+      "type": "string",
+      "description": "Path to the file containing the vulnerability"
+    },
+    "start_line": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Starting line number of the vulnerable code"
+    },
+    "end_line": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Ending line number"
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable description of the finding"
+    },
+    "engine": {
+      "type": "string",
+      "description": "Name of the analyzer that produced this finding"
+    },
+    "evidence": {
+      "type": "object",
+      "description": "Additional evidence data",
+      "additionalProperties": true
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Additional metadata",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,48 @@
+// 全局样式
+:root {
+  --vp-primary: #409eff;
+  --vp-success: #67c23a;
+  --vp-warning: #e6a23c;
+  --vp-danger: #f56c6c;
+  --vp-info: #909399;
+  --vp-bg-dark: #1a1a2e;
+  --vp-bg-sidebar: #16213e;
+  --vp-bg-main: #f0f2f5;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+#app {
+  height: 100%;
+}
+
+// 自定义滚动条
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c0c4cc;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+// 严重等级颜色
+.severity-error { color: #f56c6c; }
+.severity-warn { color: #e6a23c; }
+.severity-info { color: #409eff; }
+.severity-unknown { color: #909399; }
+
+// 裁决标签
+.verdict-confirmed { color: #f56c6c; }
+.verdict-suspicious { color: #e6a23c; }
+.verdict-rejected { color: #67c23a; }
+.verdict-pending { color: #909399; }

@@ -1,0 +1,237 @@
+# VulnPatch 公共契约定义
+# 声明公共契约文件和 /scan 必须返回的字段
+
+# 公共契约文件列表
+# 这些文件的修改需要全员讨论
+public_contract_files:
+  - path: audit_core/models.py
+    description: 核心数据模型定义
+    owner: Core Orchestrator
+    
+  - path: governance/module_boundaries.yaml
+    description: 模块边界定义
+    owner: Core Orchestrator
+    
+  - path: governance/public_contracts.yaml
+    description: 公共契约声明（本文件）
+    owner: Core Orchestrator
+    
+  - path: contracts/code_unit.schema.json
+    description: CodeUnit JSON Schema
+    owner: Core Orchestrator
+    
+  - path: contracts/raw_finding.schema.json
+    description: RawFinding JSON Schema
+    owner: Core Orchestrator
+    
+  - path: contracts/evidence_bundle.schema.json
+    description: EvidenceBundle JSON Schema
+    owner: Core Orchestrator
+    
+  - path: contracts/audit_result.schema.json
+    description: AuditResult JSON Schema
+    owner: Core Orchestrator
+    
+  - path: contracts/scan_response.schema.json
+    description: /scan API 响应 Schema
+    owner: Core Orchestrator
+    
+  - path: ARCHITECTURE.md
+    description: 架构文档
+    owner: Core Orchestrator
+    
+  - path: AGENTS.md
+    description: 根目录治理规范
+    owner: Core Orchestrator
+
+# /scan API 响应契约
+scan_response_contract:
+  description: /scan 端点必须返回的字段
+  required_fields:
+    - name: summary
+      type: object
+      required: true
+      description: 审计摘要
+      fields:
+        - name: total_code_units
+          type: integer
+          required: true
+        - name: total_findings
+          type: integer
+          required: true
+        - name: total_evidence_bundles
+          type: integer
+          required: true
+        - name: risk_score
+          type: number
+          required: true
+        - name: languages
+          type: array
+          items: string
+          required: true
+        - name: scanned_files
+          type: array
+          items: string
+          required: true
+    
+    - name: findings
+      type: array
+      required: true
+      description: 发现的漏洞列表
+      item_fields:
+        - name: id
+          type: string
+          required: true
+        - name: rule_id
+          type: string
+          required: true
+        - name: type
+          type: string
+          required: true
+        - name: severity
+          type: string
+          required: true
+        - name: confidence
+          type: string
+          required: true
+        - name: file_path
+          type: string
+          required: true
+        - name: start_line
+          type: integer
+          required: true
+        - name: message
+          type: string
+          required: true
+        - name: engine
+          type: string
+          required: true
+    
+    - name: evidence
+      type: array
+      required: true
+      description: 证据包列表
+      item_fields:
+        - name: id
+          type: string
+          required: true
+        - name: finding
+          type: object
+          required: true
+        - name: snippets
+          type: array
+          required: true
+        - name: agent_hypotheses
+          type: array
+          required: true
+        - name: agent_logs
+          type: array
+          required: true
+    
+    - name: agent_logs
+      type: array
+      required: true
+      description: Agent 执行日志
+      item_fields:
+        - name: id
+          type: string
+          required: true
+        - name: agent_name
+          type: string
+          required: true
+        - name: stage
+          type: string
+          required: true
+        - name: message
+          type: string
+          required: true
+
+# 数据模型契约
+data_model_contracts:
+  CodeUnit:
+    required_fields:
+      - id
+      - path
+      - language
+      - content
+      - start_line
+    optional_fields:
+      - end_line
+      - metadata
+  
+  RawFinding:
+    required_fields:
+      - id
+      - rule_id
+      - type
+      - severity
+      - confidence
+      - file_path
+      - start_line
+      - message
+      - engine
+    optional_fields:
+      - cwe
+      - end_line
+      - evidence
+      - metadata
+  
+  EvidenceBundle:
+    required_fields:
+      - id
+      - finding
+      - snippets
+      - agent_hypotheses
+      - agent_logs
+    optional_fields:
+      - code_unit
+      - call_chain
+      - judge_decision
+      - cwe_info
+      - score_breakdown
+      - metadata
+  
+  AuditResult:
+    required_fields:
+      - summary
+      - findings
+      - evidence
+      - agent_logs
+    optional_fields:
+      - metadata
+
+# 模块接口契约
+module_interface_contracts:
+  Analyzer:
+    description: 所有分析器必须实现的接口
+    required_methods:
+      - name: analyze
+        signature: "analyze(self, code_units: list[CodeUnit]) -> list[RawFinding]"
+        description: 分析代码单元并返回发现
+    required_attributes:
+      - name: name
+        type: string
+        description: 分析器名称
+      - name: supported_languages
+        type: list[string]
+        description: 支持的语言列表
+  
+  Agent:
+    description: 所有 Agent 必须实现的接口
+    required_methods:
+      - name: run
+        signature: "run(self, *args, **kwargs)"
+        description: 执行 Agent 任务
+    required_attributes:
+      - name: name
+        type: string
+        description: Agent 名称
+
+# 版本兼容性契约
+version_compatibility:
+  current_version: "1.0.0"
+  breaking_changes_require:
+    - 版本号更新
+    - 全员通知
+    - 迁移指南
+    - 向后兼容支持（至少一个版本）

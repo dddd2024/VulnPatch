@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node.js / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Database
+*.db
+data/*.db
+
+# Environment / Secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Test artifacts
+test_screenshots/
+.pytest_cache/
+
+# Agent browser
+.agent-browser/
+
+# Logs
+*.log

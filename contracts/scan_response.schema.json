@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vulnpatch.local/schemas/scan_response.schema.json",
+  "title": "ScanResponse",
+  "description": "Response from /scan API endpoint",
+  "type": "object",
+  "required": ["scan_id", "summary", "findings", "evidence", "agent_logs"],
+  "properties": {
+    "scan_id": {
+      "type": "string",
+      "description": "Unique identifier for this scan session"
+    },
+    "summary": {
+      "type": "object",
+      "description": "Audit summary statistics",
+      "required": ["total_code_units", "total_findings", "total_evidence_bundles", "risk_score", "languages", "scanned_files"],
+      "properties": {
+        "total_code_units": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of code units analyzed"
+        },
+        "total_findings": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of findings"
+        },
+        "total_evidence_bundles": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of evidence bundles"
+        },
+        "risk_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Overall risk score (0-100)"
+        },
+        "languages": {
+          "type": "array",
+          "description": "Languages analyzed",
+          "items": {"type": "string"}
+        },
+        "scanned_files": {
+          "type": "array",
+          "description": "List of scanned file paths",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "description": "All findings",
+      "items": {
+        "type": "object",
+        "required": ["id", "rule_id", "type", "severity", "confidence", "file_path", "start_line", "message", "engine"],
+        "properties": {
+          "id": {"type": "string"},
+          "rule_id": {"type": "string"},
+          "type": {"type": "string"},
+          "severity": {"type": "string"},
+          "confidence": {"type": "string"},
+          "file_path": {"type": "string"},
+          "start_line": {"type": "integer"},
+          "message": {"type": "string"},
+          "engine": {"type": "string"}
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "description": "Evidence bundles for findings",
+      "items": {
+        "type": "object",
+        "required": ["id", "finding", "snippets", "agent_hypotheses", "agent_logs"],
+        "properties": {
+          "id": {"type": "string"},
+          "finding": {"type": "object"},
+          "snippets": {"type": "array"},
+          "agent_hypotheses": {"type": "array"},
+          "agent_logs": {"type": "array"}
+        }
+      }
+    },
+    "agent_logs": {
+      "type": "array",
+      "description": "Agent execution logs",
+      "items": {
+        "type": "object",
+        "required": ["id", "agent_name", "stage", "message"],
+        "properties": {
+          "id": {"type": "string"},
+          "agent_name": {"type": "string"},
+          "stage": {"type": "string"},
+          "message": {"type": "string"}
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}
