@@ -16,6 +16,7 @@ Architecture Guard - 轻量级架构检查工具
 """
 
 import ast
+import warnings
 import re
 import sys
 import yaml
@@ -236,23 +237,42 @@ class ArchitectureGuard:
                 if py_file.name == "__init__.py":
                     continue
                     
-                content = py_file.read_text()
-                
-                # 检查直接文件系统操作
-                fs_patterns = [
-                    ("open(", "直接文件打开"),
-                    ("Path.read_text()", "Path 读取文件"),
-                    ("Path.read_bytes()", "Path 读取文件"),
-                    ("os.walk(", "os.walk 遍历目录"),
-                    ("os.listdir(", "os.listdir 列出目录"),
-                    ("Path.rglob(", "Path.rglob 遍历文件"),
-                    ("Path.glob(", "Path.glob 遍历文件"),
-                ]
-                
-                for pattern, desc in fs_patterns:
-                    if pattern in content:
-                        # 排除测试文件和注释中的用法
-                        if "test" not in py_file.name and not self._is_in_comment(content, pattern):
+                content = py_file.read_text(encoding="utf-8")
+
+                # 只检查真实 AST 调用，不扫描字符串常量。PoC 模板本身可能
+                # 包含 ``open(...)`` 文本，但模板文本并不代表 Agent 在读文件。
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", SyntaxWarning)
+                        tree = ast.parse(content)
+                except SyntaxError:
+                    tree = None
+
+                fs_calls = {
+                    "open": "直接文件打开",
+                    "os.walk": "os.walk 遍历目录",
+                    "os.listdir": "os.listdir 列出目录",
+                    "read_text": "Path 读取文件",
+                    "read_bytes": "Path 读取文件",
+                    "rglob": "Path.rglob 遍历文件",
+                    "glob": "Path.glob 遍历文件",
+                }
+
+                if tree is not None:
+                    for node in ast.walk(tree):
+                        if not isinstance(node, ast.Call):
+                            continue
+                        func = node.func
+                        call_name = ""
+                        if isinstance(func, ast.Name):
+                            call_name = func.id
+                        elif isinstance(func, ast.Attribute):
+                            if isinstance(func.value, ast.Name):
+                                call_name = f"{func.value.id}.{func.attr}"
+                            else:
+                                call_name = func.attr
+                        desc = fs_calls.get(call_name)
+                        if desc:
                             violation = f"{py_file}: Agent 禁止直接文件系统操作 ({desc})"
                             self.violations.append(violation)
                             print(f"  ❌ {violation}")
@@ -432,8 +452,10 @@ class ArchitectureGuard:
         imports = []
         
         try:
-            content = file_path.read_text()
-            tree = ast.parse(content)
+            content = file_path.read_text(encoding="utf-8")
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                tree = ast.parse(content)
             
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):

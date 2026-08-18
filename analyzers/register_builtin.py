@@ -26,6 +26,30 @@ def register_builtin_analyzers(registry: AnalyzerRegistry) -> None:
         import logging
         logging.getLogger(__name__).warning("Failed to register PatternAnalyzer: %s", e)
 
+    # Python AST analyzer (deterministic structural checks)
+    try:
+        from analyzers.ast_analyzer import ASTAnalyzer
+        registry.register(ASTAnalyzer())
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Failed to register ASTAnalyzer: %s", e)
+
+    # Python analyzer
+    try:
+        from analyzers.python.register import register_analyzers as register_python
+        register_python(registry)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Failed to register PythonAnalyzer: %s", e)
+
+    # Taint analyzer adapter
+    try:
+        from analyzers.taint.register import register_analyzers as register_taint
+        register_taint(registry)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Failed to register TaintAnalyzer: %s", e)
+
     # C/C++ analyzers
     try:
         from analyzers.c_cpp.register import register_analyzers as register_c_cpp

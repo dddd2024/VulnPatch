@@ -304,8 +304,11 @@ class ModelRouter:
         if selected_missing_capabilities:
             reason_codes.append("REQUIRED_CAPABILITIES_UNMET_FALLBACK")
 
+        # Normalize the context at the model boundary.  This avoids coupling a
+        # persisted/long-lived router to a particular in-memory Pydantic class
+        # identity (for example after plugin/module reloads).
         decision = RoutingDecision(
-            context=context,
+            context=context.model_dump(mode="python"),
             selected_provider=selected.provider,
             selected_model=selected.model,
             candidates=sorted(candidates, key=lambda item: item.score, reverse=True),

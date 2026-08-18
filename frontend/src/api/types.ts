@@ -195,3 +195,47 @@ export interface CaseEvent {
   metadata: Record<string, any>
   created_at: string
 }
+
+export interface RepairRequest {
+  scan_id: string
+  finding_id: string
+  sensitivity?: 'public' | 'internal' | 'confidential'
+  repair_variant?: 'auto' | 'safe' | 'weak'
+}
+
+export interface VerificationCheckItem {
+  name: string
+  status: 'pass' | 'fail' | 'skipped'
+  passed: boolean
+  details?: string
+  input?: string
+  metadata?: Record<string, any>
+}
+
+export interface RepairResponse {
+  run_id: string
+  finding: FindingItem
+  routing_decision: RoutingDecision
+  historical_matches: CaseMatch[]
+  patch: {
+    patch_id: string
+    provider: string
+    model?: string
+    strategy: string
+    patched_code: string
+    diff: string
+    reason: string
+    historical_cases_used: string[]
+    historical_cases_avoided: string[]
+    metadata: Record<string, any>
+  }
+  verification: {
+    verification_id: string
+    passed: boolean
+    checks: VerificationCheckItem[]
+    required_checks: string[]
+    metadata: Record<string, any>
+  }
+  verification_log: AgentLogItem
+  evolved_case: RepairCase
+}

@@ -29,6 +29,25 @@ class ScanResponse(BaseModel):
     cve_candidates: list[dict] = Field(default_factory=list, description="CVE candidate assessments")
 
 
+class RepairRequest(BaseModel):
+    """Generate and deterministically verify a repair for a persisted finding."""
+    scan_id: str
+    finding_id: str
+    sensitivity: Literal["public", "internal", "confidential"] = "public"
+    repair_variant: Literal["auto", "safe", "weak"] = "auto"
+
+
+class RepairResponse(BaseModel):
+    run_id: str
+    finding: dict
+    routing_decision: dict
+    historical_matches: list[dict]
+    patch: dict
+    verification: dict
+    verification_log: dict
+    evolved_case: dict
+
+
 class HealthResponse(BaseModel):
     """Response model for /health endpoint."""
 

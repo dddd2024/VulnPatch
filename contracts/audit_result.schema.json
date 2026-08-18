@@ -4,12 +4,24 @@
   "title": "AuditResult",
   "description": "Complete result of an audit run",
   "type": "object",
-  "required": ["summary", "findings", "evidence", "agent_logs"],
+  "required": [
+    "summary",
+    "findings",
+    "evidence",
+    "agent_logs"
+  ],
   "properties": {
     "summary": {
       "type": "object",
       "description": "Audit summary statistics",
-      "required": ["total_code_units", "total_findings", "total_evidence_bundles", "risk_score", "languages", "scanned_files"],
+      "required": [
+        "total_code_units",
+        "total_findings",
+        "total_evidence_bundles",
+        "risk_score",
+        "languages",
+        "scanned_files"
+      ],
       "properties": {
         "total_code_units": {
           "type": "integer",
@@ -35,12 +47,16 @@
         "languages": {
           "type": "array",
           "description": "Languages analyzed",
-          "items": {"type": "string"}
+          "items": {
+            "type": "string"
+          }
         },
         "scanned_files": {
           "type": "array",
           "description": "List of scanned file paths",
-          "items": {"type": "string"}
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false
@@ -48,22 +64,36 @@
     "findings": {
       "type": "array",
       "description": "All findings",
-      "items": {"$ref": "raw_finding.schema.json"}
+      "items": {
+        "$ref": "raw_finding.schema.json"
+      }
     },
     "evidence": {
       "type": "array",
       "description": "Evidence bundles for findings",
-      "items": {"$ref": "evidence_bundle.schema.json"}
+      "items": {
+        "$ref": "evidence_bundle.schema.json"
+      }
     },
     "agent_logs": {
       "type": "array",
       "description": "Agent execution logs",
-      "items": {"type": "object"}
+      "items": {
+        "type": "object"
+      }
     },
     "metadata": {
       "type": "object",
       "description": "Additional metadata",
       "additionalProperties": true
+    },
+    "cve_candidates": {
+      "type": "array",
+      "description": "CVE candidate assessments associated with findings",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
     }
   },
   "additionalProperties": false

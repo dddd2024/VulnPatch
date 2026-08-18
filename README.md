@@ -1,96 +1,123 @@
 # VulnPatch
 
-自主多模型调度与案例库自进化的漏洞修复辅助系统
+**自主多模型调度与案例库自进化的漏洞修复辅助系统**
 
 ## 项目定位
 
-VulnPatch 是一个模块化安全审计平台，结合静态分析与 LLM 推理能力检测源代码漏洞。
-前端基于 Vue 3 + Element Plus + ECharts 构建，后端基于 FastAPI 提供 REST API。
+VulnPatch 是一个面向源代码漏洞检测、修复与验证的安全工程平台。静态分析、污点分析与 Agent 审计负责发现漏洞；发现进入修复阶段后，系统会依据任务复杂度、代码敏感度、模型健康状态、成本/时延和能力要求自主选择执行模型，并检索历史正/负修复案例辅助生成补丁。只有经过确定性验证的结果才会写回案例库，成为后续相似漏洞修复的可复用经验。
 
-**核心流程**：
+前端基于 Vue 3 + Element Plus + ECharts，后端基于 FastAPI。比赛能力不是独立的“比赛页面”：普通扫描与普通漏洞详情使用正式产品 API 和同一套 RepairPipeline，`/api/demo/*` 仅保留为可复现实验 fixture。
+
+## 核心闭环
+
+```text
+代码输入
+  ↓
+RepoLoader / LanguageRouter
+  ↓
+Pattern / AST / Taint Analyzers
+  ↓
+ReconAgent → AnalysisAgent → JudgeAgent
+  ↓
+RawFinding + EvidenceBundle
+  ↓
+ModelRouter
+  ├─ complexity / confidence
+  ├─ privacy policy
+  ├─ provider health / availability
+  ├─ cost / latency
+  └─ required capabilities
+  ↓
+CaseRetriever（历史 POSITIVE / NEGATIVE RepairCase）
+  ↓
+RepairAgent
+  ↓
+PatchCandidate
+  ↓
+VerificationAgent
+  ├─ syntax / compile
+  ├─ static rescan
+  ├─ PoC
+  ├─ regression
+  └─ anti-bypass
+  ↓
+VerificationResult
+  ↓
+CaseEvolver
+  ├─ PASS → POSITIVE case
+  └─ FAIL → NEGATIVE case
+  ↓
+下一次相似任务检索并实际影响修复决策
 ```
-代码输入 → 项目解析 → 攻击面识别 → 静态分析/污点分析 → LLM Agent 漏洞假设 → 证据链 → Judge Agent 裁决 → 审计报告
-```
+
+核心设计原则是：**模型选择有证据、案例复用有归因、修复结果必须经过验证、失败经验同样进入知识闭环。**
 
 ## 架构概览
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              VulnPatch Platform                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                         API Layer                                    │   │
-│  │  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌───────────┐          │   │
-│  │  │ POST     │  │ GET      │  │ GET       │  │ GET       │          │   │
-│  │  │ /scan    │  │ /health  │  │ /findings │  │ /report   │          │   │
-│  │  │ (primary)│  │          │  │ /evidence │  │ /agents   │          │   │
-│  │  └──────────┘  └──────────┘  │ /logs     │  │ /json     │          │   │
-│  │                              └───────────┘  └───────────┘            │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                    │                                         │
-│                                    ▼                                         │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    API Server (FastAPI)                              │   │
-│  │              (Main entry point for audit workflow)                   │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                    │                                         │
-│          ┌─────────────────────────┼─────────────────────────┐              │
-│          │                         │                         │              │
-│          ▼                         ▼                         ▼              │
-│  ┌──────────────┐        ┌──────────────┐        ┌──────────────┐         │
-│  │    ingest    │        │   analyzers  │        │    agents    │         │
-│  │              │        │              │        │              │         │
-│  │ Code loading │        │ Pattern      │        │ ReconAgent   │         │
-│  │ Language     │        │ AST          │        │ AnalysisAgent│         │
-│  │ detection    │        │ Taint        │        │ JudgeAgent   │         │
-│  └──────────────┘        └──────────────┘        └──────────────┘         │
-│          │                         │                         │              │
-│          └─────────────────────────┼─────────────────────────┘              │
-│                                    │                                         │
-│                                    ▼                                         │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                         evidence                                     │   │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────────┐ │   │
-│  │  │ Snippets    │  │ Call Chains │  │ Confidence Ledger           │ │   │
-│  │  └─────────────┘  └─────────────┘  └─────────────────────────────┘ │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                    │                                         │
-│                                    ▼                                         │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                       knowledge                                      │   │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────────┐ │   │
-│  │  │ CWE Mapper  │  │ RAG         │  │ Vuln Graph                  │ │   │
-│  │  └─────────────┘  └─────────────┘  └─────────────────────────────┘ │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                    │                                         │
-│                                    ▼                                         │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                        report                                        │   │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────────┐ │   │
-│  │  │ JSON        │  │ Markdown    │  │ HTML                        │ │   │
-│  │  └─────────────┘  └─────────────┘  └─────────────────────────────┘ │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
+```text
+┌──────────────────────────────────────────────────────────────────────┐
+│                              VulnPatch                                │
+├──────────────────────────────────────────────────────────────────────┤
+│ Product API                                                          │
+│  POST /api/scan          POST /api/repair                            │
+│  GET  /api/findings      GET  /api/routing/decisions                │
+│  GET  /api/evidence      GET  /api/cases /api/cases/events          │
+├──────────────────────────────────────────────────────────────────────┤
+│ AuditOrchestrator                                                    │
+│  RepoLoader → AnalyzerRegistry → AgentRuntime → Evidence / Report    │
+├──────────────────────────────────────────────────────────────────────┤
+│ RepairPipeline                                                       │
+│  ModelRouter → CaseRetriever → RepairAgent → VerificationAgent      │
+│       ↑                                            ↓                 │
+│       └──────────── CaseStore ← CaseEvolver ───────┘                 │
+├──────────────────────────────────────────────────────────────────────┤
+│ Persistence                                                          │
+│  AuditState / RepairCase+CaseEvent / RoutingDecisionStore (SQLite)   │
+├──────────────────────────────────────────────────────────────────────┤
+│ Generic Frontend                                                     │
+│  Scan / Findings+Repair / Agents / Knowledge / Evidence / Report     │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-## 数据流
+## 两项标题能力
 
-```
-Input → ingest → CodeUnit → analyzers → RawFinding → merge → agents →
-EvidenceBundle → knowledge → report → AuditResult
-```
+### 1. 自主多模型调度
+
+`ModelRouter` 不按固定优先级盲目调用模型，而是记录完整 `RoutingDecision`：
+
+- 简单、高置信度任务可直接使用确定性 `rule_engine`，避免不必要的模型成本；
+- 复杂公开任务可选择具备所需能力的语义模型；
+- 机密源码对云模型执行隐私策略阻断，优先本地 provider；
+- provider 不可用或健康异常时按 fallback chain 降级；
+- `required_capabilities` 是真实 eligibility gate，无法满足时会明确留下 unmet-capability 证据；
+- 路由决策写入 SQLite，可在通用 Agents 页面/API 中审计。
+
+### 2. 案例库自进化
+
+`RepairCase` 不只是静态知识条目。每次修复都会经过 `VerificationAgent`，再由 `CaseEvolver` 写入：
+
+- `POSITIVE`：验证通过的成功策略；
+- `NEGATIVE`：验证失败、被绕过或产生回归的失败策略；
+- 后续任务通过 `CaseRetriever` 检索相似案例；
+- `RepairAgent` 只允许高可信正案例选择预注册安全 adapter，负案例用于阻断已知失败策略；
+- reuse 指标只归因给实际 `used/avoided` 的案例，而不是所有被检索到的案例。
+
+这使“案例被检索”与“案例实际改变 repair decision”可以被分别验证。
 
 ## 核心模块
 
-- **audit_core**: 核心数据模型和编排逻辑
-- **ingest**: 输入处理和代码加载
-- **analyzers**: 静态分析引擎（Pattern、AST、Taint）
-- **agents**: LLM 驱动的分析 Agent（Recon、Analysis、Judge）
-- **evidence**: 证据收集和管理
-- **knowledge**: 知识库和分类（CWE、RAG、Vuln Graph）
-- **report**: 报告生成（JSON/Markdown/HTML）
-- **api**: FastAPI 服务器和 REST API 接口
-- **frontend**: Vue 3 前端 Web 界面（Element Plus + ECharts）
+- **audit_core/orchestrator.py**：正式扫描业务边界，负责输入、分析器、Agent、证据与结果汇总。
+- **audit_core/agent_runtime.py**：Agent 执行隔离、fallback 与日志收集。
+- **audit_core/repair_pipeline.py**：通用修复闭环；正式产品 API 与可复现实验 fixture 共用。
+- **ingest/**：本地目录、GitHub/GitLab/Gitea、ZIP 和代码片段加载。
+- **analyzers/**：Pattern、AST、Python/JavaScript 和 Taint 分析能力。
+- **llm/model_router.py**：多模型策略路由与 fallback。
+- **llm/routing_store.py**：RoutingDecision 持久化。
+- **agents/repair_agent.py**：结构化补丁生成与案例感知策略选择。
+- **agents/verification_agent.py**：compile/rescan/PoC/regression/anti-bypass 验证。
+- **knowledge/**：RepairCase、CaseStore、CaseRetriever、CaseEvolver、CWE/RAG。
+- **report/**：JSON / Markdown / HTML / PDF 报告。
+- **frontend/**：通用扫描、漏洞修复、路由证据、案例库、证据链与报告界面。
 
 ## 快速开始
 
@@ -100,82 +127,62 @@ EvidenceBundle → knowledge → report → AuditResult
 pip install -r requirements.txt
 ```
 
-### 2. 启动后端 API 服务
+### 2. 启动后端
 
 ```bash
 python api/server.py
 ```
 
-后端服务默认运行在 `http://localhost:8000`，提供所有 REST API 接口。
+默认地址：`http://localhost:8000`。
 
 ### 3. 启动前端
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-前端默认运行在 `http://localhost:5173`，自动代理 `/api` 请求到后端 `localhost:8000`。
+默认地址：`http://localhost:5173`，Vite 将 `/api` 代理到 `localhost:8000`。
 
-### 4. 使用 Web 界面
+### 4. 正常产品使用流程
 
-1. 浏览器打开 `http://localhost:5173`
-2. 进入「安全扫描」页面，选择输入方式：
-   - **代码片段**: 直接粘贴代码
-   - **本地路径**: 输入本地仓库路径
-   - **GitHub 仓库**: 输入 GitHub URL
-3. 点击「开始扫描」，等待结果返回
-4. 在「仪表盘」查看漏洞统计和图表
-5. 在「漏洞发现」查看详情和代码片段
-6. 在「证据链」查看调用链和 Judge 裁决
-7. 在「审计报告」生成 JSON/Markdown/HTML 报告
+1. 在「安全扫描」提交代码、本地路径或 GitHub 仓库；
+2. 在「漏洞发现」查看 finding，点击「生成修复」；
+3. 修复抽屉展示模型选择理由、历史案例 used/avoided、patch diff 和 Verification checks；
+4. 在「Agents」查看持久化 RoutingDecision；
+5. 在「Knowledge」查看新生成的正/负 RepairCase 和演化事件；
+6. 在「证据链」与「审计报告」查看检测证据和最终报告。
 
-### 运行架构守卫检查
+## 主要 API
+
+- `POST /api/scan`：正式扫描入口（code/path/github）
+- `POST /api/repair`：对已扫描 finding 执行通用修复闭环
+- `GET  /api/findings`：最近扫描 findings
+- `GET  /api/evidence`：最近扫描 EvidenceBundle
+- `GET  /api/agents/logs`：Agent 执行日志
+- `GET  /api/routing/decisions`：持久化多模型路由决策
+- `GET  /api/cases`：修复案例库
+- `GET  /api/cases/events`：案例演化/复用事件
+- `GET  /api/report/json|markdown|html`：审计报告
+- `GET  /api/scans`：扫描历史
+
+为了兼容历史调用，服务仍保留 `/scan`、`/health` 等根路径 alias；新客户端统一使用 `/api/*`。
+
+## 展示与验证
+
+核心能力可通过普通产品路径直接演示；`/api/demo/*` 只用于确定性 fixture、故障注入和重复实验，不包含比赛专用前端。
 
 ```bash
+# 核心调度 + 案例进化回归
+python -m pytest tests/test_competition_capabilities.py tests/test_closeout_review_fixes.py -q
+
+# 架构守卫
 python governance/architecture_guard.py
+
+# 全仓 Python 编译完整性
+python -m compileall -q .
 ```
-
-### 运行契约测试
-
-```bash
-python -m pytest tests/contracts/ -v
-```
-
-## API 端点
-
-所有 API 端点前缀为 `/api`：
-
-- `POST /api/scan` - 主扫描端点（支持 code/path/github 三种输入）
-- `GET  /api/health` - 健康检查
-- `GET  /api/findings` - 最近扫描的发现列表
-- `GET  /api/evidence` - 最近扫描的证据包
-- `GET  /api/agents/logs` - 最近扫描的 Agent 日志
-- `GET  /api/report/json` - JSON 格式的完整审计结果
-- `GET  /api/report/markdown` - Markdown 格式的审计报告
-- `GET  /api/report/html` - HTML 格式的审计报告
-- `GET  /api/scans` - 扫描历史列表
-- `POST /api/auth/login` - 用户登录
-- `POST /api/auth/register` - 用户注册
-
-## 文档
-
-所有项目文档集中管理在 `docs/` 目录下：
-
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - 架构文档
-- [docs/AGENTS.md](docs/AGENTS.md) - AI 协作治理规范
-- [docs/AI_COLLABORATION.md](docs/AI_COLLABORATION.md) - AI 协作指南
-- [docs/testing_guide.md](docs/testing_guide.md) - 测试指南
-- [docs/DETECTOR_MIGRATION.md](docs/DETECTOR_MIGRATION.md) - 检测器迁移记录
-- [docs/VULNPATCH_IMPROVEMENTS.md](docs/VULNPATCH_IMPROVEMENTS.md) - 改进清单
-
-任务模板：
-
-- [TASKS/core_orchestrator_task.md](TASKS/core_orchestrator_task.md) - Core Orchestrator 任务模板
-- [TASKS/analyzer_taint_task.md](TASKS/analyzer_taint_task.md) - Analyzer & Taint Engine 任务模板
-- [TASKS/agent_knowledge_task.md](TASKS/agent_knowledge_task.md) - Agent & Knowledge 任务模板
-- [TASKS/api_report_ui_task.md](TASKS/api_report_ui_task.md) - API / UI / Report 任务模板
 
 ## CVE Candidate Review
 
