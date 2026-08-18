@@ -9,6 +9,8 @@ import type {
   HealthStatus,
 } from './types'
 
+export type { ScanRequest } from './types'
+
 const http = axios.create({
   baseURL: '/api',
   timeout: 120000,
@@ -64,10 +66,10 @@ export const getReportJson = (scanId?: string) =>
   http.get('/report/json', { params: scanId ? { scan_id: scanId } : {} })
 
 export const getReportMarkdown = (scanId?: string) =>
-  http.get('/report/markdown', { params: scanId ? { scan_id: scanId } : {} }, { responseType: 'text' } as any)
+  http.get('/report/markdown', { params: scanId ? { scan_id: scanId } : {}, responseType: 'text' })
 
 export const getReportHtml = (scanId?: string) =>
-  http.get('/report/html', { params: scanId ? { scan_id: scanId } : {} }, { responseType: 'text' } as any)
+  http.get('/report/html', { params: scanId ? { scan_id: scanId } : {}, responseType: 'text' })
 
 // 获取扫描历史
 export const getScanHistory = () => http.get('/scans')
@@ -80,12 +82,7 @@ export const getAuthStatus = () => http.get('/auth/status')
 
 export default http
 
-// 比赛展示 / 自主调度 / 案例进化
-export const runCompetitionDemo = (data: import('./types').DemoRunRequest) =>
-  http.post<import('./types').DemoRunResponse>('/demo/run', data)
-
-export const resetCompetitionDemo = () => http.post('/demo/reset')
-export const getCompetitionDemoState = () => http.get('/demo/state')
+// 自主调度 / 案例进化
 export const getRoutingDecisions = () => http.get<import('./types').RoutingDecision[]>('/routing/decisions')
 export const getRepairCases = (params?: { cwe?: string; outcome?: string; limit?: number }) =>
   http.get<import('./types').RepairCase[]>('/cases', { params })

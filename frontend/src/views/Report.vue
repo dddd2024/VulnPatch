@@ -58,7 +58,7 @@
       <!-- HTML 报告 -->
       <div v-if="reportFormat === 'html' && reportText" v-html="reportText" class="html-report" />
 
-      <el-empty v-if="!reportData && !reportText && !loading" description="请点击"生成报告"查看审计报告" />
+      <el-empty v-if="!reportData && !reportText && !loading" description="请点击「生成报告」查看审计报告" />
     </el-card>
   </div>
 </template>

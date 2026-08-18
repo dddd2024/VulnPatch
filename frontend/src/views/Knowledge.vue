@@ -9,10 +9,9 @@
       </template>
 
       <el-row :gutter="12" class="stats">
-        <el-col :span="6"><el-statistic title="案例总数" :value="stats.total" /></el-col>
-        <el-col :span="6"><el-statistic title="高可信案例" :value="stats.high_trust" /></el-col>
-        <el-col :span="6"><el-statistic title="负案例" :value="stats.negative" /></el-col>
-        <el-col :span="6"><el-statistic title="比赛闭环新增" :value="stats.demo_created" /></el-col>
+        <el-col :span="8"><el-statistic title="案例总数" :value="stats.total" /></el-col>
+        <el-col :span="8"><el-statistic title="高可信案例" :value="stats.high_trust" /></el-col>
+        <el-col :span="8"><el-statistic title="负案例" :value="stats.negative" /></el-col>
       </el-row>
 
       <el-alert title="这里展示的是动态 RepairCase，不是静态 CWE 文案。只有经过 Verification 的补丁才会写回；失败补丁会成为负案例约束后续修复。"
@@ -59,21 +58,25 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { getCaseEvents, getCompetitionDemoState, getRepairCases } from '@/api'
+import { getCaseEvents, getRepairCases } from '@/api'
 import type { CaseEvent, RepairCase } from '@/api/types'
 
 const loading = ref(false)
 const cases = ref<RepairCase[]>([])
 const events = ref<CaseEvent[]>([])
-const stats = ref({ total: 0, high_trust: 0, negative: 0, demo_created: 0 })
+const stats = ref({ total: 0, high_trust: 0, negative: 0 })
 
 async function load() {
   loading.value = true
   try {
-    const [caseRes, eventRes, stateRes] = await Promise.all([getRepairCases({ limit: 200 }), getCaseEvents(200), getCompetitionDemoState()])
+    const [caseRes, eventRes] = await Promise.all([getRepairCases({ limit: 200 }), getCaseEvents(200)])
     cases.value = caseRes.data
     events.value = eventRes.data
-    stats.value = { ...stats.value, ...(stateRes.data.case_stats || {}) }
+    stats.value = {
+      total: cases.value.length,
+      high_trust: cases.value.filter((c) => c.trust_score >= 0.8).length,
+      negative: cases.value.filter((c) => c.outcome === 'NEGATIVE').length,
+    }
   } finally { loading.value = false }
 }
 function formatTime(ts: string) { try { return new Date(ts).toLocaleString('zh-CN') } catch { return ts } }

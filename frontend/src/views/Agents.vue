@@ -25,7 +25,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!decisions.length" description="暂无 RoutingDecision，请先从“比赛展示”运行一个闭环" />
+      <el-empty v-if="!decisions.length" description="暂无 RoutingDecision，请先运行一次安全扫描或修复任务" />
     </el-card>
 
     <el-card shadow="hover">

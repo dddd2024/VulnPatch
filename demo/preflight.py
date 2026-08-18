@@ -5,13 +5,16 @@ import importlib.util
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from env_config import load_project_env
 load_project_env()
-
-ROOT = Path(__file__).resolve().parent.parent
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:

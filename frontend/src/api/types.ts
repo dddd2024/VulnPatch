@@ -141,7 +141,7 @@ export interface ScanRecord {
   updated_at: string
 }
 
-// 比赛展示：自主多模型调度 + 案例库自进化
+// 自主多模型调度 + 案例库自进化
 export interface RoutingCandidate {
   provider: string
   model?: string
@@ -194,26 +194,4 @@ export interface CaseEvent {
   scan_id?: string
   metadata: Record<string, any>
   created_at: string
-}
-
-export interface DemoRunRequest {
-  scenario: 'simple_sql' | 'path_evolution' | 'similar_path'
-  sensitivity: 'public' | 'internal' | 'confidential'
-  mode: 'live' | 'replay'
-  repair_variant: 'auto' | 'safe' | 'weak'
-  simulate_provider_failure: boolean
-}
-
-export interface DemoRunResponse {
-  run_id: string
-  scenario: string
-  mode: string
-  finding: FindingItem
-  routing_decision: RoutingDecision
-  historical_matches: CaseMatch[]
-  patch: Record<string, any>
-  verification: Record<string, any>
-  evolved_case: RepairCase
-  case_stats: Record<string, number>
-  events: CaseEvent[]
 }

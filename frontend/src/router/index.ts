@@ -8,12 +8,6 @@ const routes: RouteRecordRaw[] = [
     redirect: '/dashboard',
     children: [
       {
-        path: 'competition',
-        name: 'CompetitionDemo',
-        component: () => import('@/views/CompetitionDemo.vue'),
-        meta: { title: '比赛展示', icon: 'Trophy' },
-      },
-      {
         path: 'dashboard',
         name: 'Dashboard',
         component: () => import('@/views/Dashboard.vue'),

@@ -24,10 +24,6 @@
         router
         class="sidebar-menu"
       >
-        <el-menu-item index="/competition">
-          <el-icon><Trophy /></el-icon>
-          <template #title>比赛展示</template>
-        </el-menu-item>
         <el-menu-item index="/dashboard">
           <el-icon><DataBoard /></el-icon>
           <template #title>仪表盘</template>
