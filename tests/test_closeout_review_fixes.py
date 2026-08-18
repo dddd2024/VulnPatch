@@ -93,6 +93,38 @@ def test_path_scenario_separates_provider_and_verification_capabilities():
     assert context.metadata["verification_requirements"] == ["anti_bypass"]
 
 
+def test_path_scenario_rule_engine_satisfies_patch_generation_requirement():
+    import api.competition_demo as demo_api
+
+    unit = demo_api._load_scenario("path_evolution")
+    finding = demo_api._find_primary_finding(unit)
+    context = demo_api._routing_context(
+        CompetitionDemoRequest(
+            scenario="path_evolution",
+            sensitivity="confidential",
+            mode="live",
+            repair_variant="auto",
+        ),
+        finding,
+        unit,
+    )
+    router = ModelRouter(
+        availability_overrides={
+            "rule_engine": True,
+            "ollama": False,
+            "deepseek": False,
+            "openai": False,
+        }
+    )
+    decision = router.select(context)
+    selected = next(candidate for candidate in decision.candidates if candidate.provider == decision.selected_provider)
+
+    assert decision.selected_provider == "rule_engine"
+    assert not any(reason.startswith("MISSING_REQUIRED_CAPABILITIES:") for reason in selected.reasons)
+    assert "REQUIRED_CAPABILITIES_UNMET_FALLBACK" not in decision.reason_codes
+    assert decision.metadata["selected_missing_capabilities"] == []
+
+
 def test_case_reuse_metrics_only_for_cases_patch_consumed(monkeypatch):
     import api.competition_demo as demo_api
 
