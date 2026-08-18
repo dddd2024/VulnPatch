@@ -88,18 +88,23 @@ def _python_call_chain(finding: RawFinding, code_unit: CodeUnit) -> list[dict[st
     for values in reverse.values():
         values.sort(key=lambda item: (item[0], item[1]))
 
-    # Find the shortest source-grounded caller path that reaches the vulnerable function.
+    # Prefer a module-rooted path. If none exists, retain the deepest observed
+    # caller chain instead of dropping useful caller evidence.
     queue: deque[tuple[str, list[str]]] = deque([(target, [target])])
     visited = {target}
     chosen: list[str] | None = None
+    best: list[str] = [target]
     while queue:
         current, upward_path = queue.popleft()
         if len(upward_path) > 8:
             continue
         for caller, _line in reverse.get(current, []):
             candidate = upward_path + [caller]
+            forward_candidate = list(reversed(candidate))
+            if len(forward_candidate) > len(best):
+                best = forward_candidate
             if caller == "<module>":
-                chosen = list(reversed(candidate))
+                chosen = forward_candidate
                 queue.clear()
                 break
             if caller not in visited:
@@ -108,7 +113,7 @@ def _python_call_chain(finding: RawFinding, code_unit: CodeUnit) -> list[dict[st
         if chosen is not None:
             break
 
-    names = chosen or [target]
+    names = chosen or best
     chain: list[dict[str, Any]] = []
     for name in names:
         if name == "<module>":
