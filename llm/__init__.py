@@ -47,6 +47,9 @@ try:
 except ImportError:
     pass
 
+from llm.model_router import ModelRouter
+from llm.routing_models import RoutingContext, RoutingDecision, RoutingCandidate, ModelProfile
+
 __all__ = [
     "LLMClientBase",
     "LLMResponse",
@@ -61,4 +64,9 @@ __all__ = [
     "OpenAIClient",
     "DeepSeekClient",
     "MultiLLMClient",
+    "ModelRouter",
+    "RoutingContext",
+    "RoutingDecision",
+    "RoutingCandidate",
+    "ModelProfile",
 ]

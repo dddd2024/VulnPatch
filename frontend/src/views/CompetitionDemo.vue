@@ -1,0 +1,56 @@
+<template>
+  <div class="competition-page">
+    <el-card class="hero" shadow="never">
+      <div class="hero-row">
+        <div><h2>自主修复闭环 · 比赛展示</h2><p>新漏洞 → 自主多模型调度 → 历史案例约束 → 补丁 → 确定性验证 → 案例库自进化</p></div>
+        <el-tag type="success" effect="dark">全部数据来自真实后端对象</el-tag>
+      </div>
+    </el-card>
+    <el-card shadow="hover" class="controls">
+      <el-form :inline="true" :model="form">
+        <el-form-item label="场景"><el-select v-model="form.scenario" style="width:190px"><el-option label="简单 SQL 注入" value="simple_sql"/><el-option label="路径遍历 · 进化" value="path_evolution"/><el-option label="相似路径遍历 · 复用" value="similar_path"/></el-select></el-form-item>
+        <el-form-item label="代码敏感级别"><el-select v-model="form.sensitivity" style="width:150px"><el-option label="Public" value="public"/><el-option label="Internal" value="internal"/><el-option label="Confidential" value="confidential"/></el-select></el-form-item>
+        <el-form-item label="执行模式"><el-select v-model="form.mode" style="width:150px"><el-option label="LIVE 实时" value="live"/><el-option label="REPLAY 离线复现" value="replay"/></el-select></el-form-item>
+        <el-form-item label="候选补丁"><el-select v-model="form.repair_variant" style="width:165px"><el-option label="AUTO 自主生成" value="auto"/><el-option label="SAFE 确定性安全候选" value="safe"/><el-option label="WEAK 弱补丁实验" value="weak"/></el-select></el-form-item>
+        <el-form-item><el-checkbox v-model="form.simulate_provider_failure">显式模拟云模型故障</el-checkbox></el-form-item>
+        <el-form-item><el-button type="primary" :loading="running" @click="runDemo">运行完整闭环</el-button><el-button @click="resetDemo">重置 Demo</el-button></el-form-item>
+      </el-form>
+      <el-alert v-if="form.mode === 'replay'" type="warning" :closable="false" show-icon title="离线复现模式：只复现已记录的模型响应；漏洞检测、验证、案例写回与召回仍实时执行。"/>
+      <el-alert v-if="form.repair_variant !== 'auto'" type="info" :closable="false" show-icon title="SAFE/WEAK 为显式实验候选，不伪装成自主模型输出；AUTO 才执行路由器的真实 fallback 链。"/>
+    </el-card>
+    <el-row :gutter="16" class="stats-row"><el-col :span="6"><el-card shadow="hover"><el-statistic title="案例总数" :value="stats.total || 0"/></el-card></el-col><el-col :span="6"><el-card shadow="hover"><el-statistic title="高可信案例" :value="stats.high_trust || 0"/></el-card></el-col><el-col :span="6"><el-card shadow="hover"><el-statistic title="负案例" :value="stats.negative || 0"/></el-card></el-col><el-col :span="6"><el-card shadow="hover"><el-statistic title="本次 Demo 新增" :value="stats.demo_created || 0"/></el-card></el-col></el-row>
+    <template v-if="result">
+      <el-row :gutter="16">
+        <el-col :span="12"><el-card shadow="hover" class="panel"><template #header><strong>① 自主多模型调度 · RoutingDecision</strong></template>
+          <el-descriptions :column="2" border size="small" class="mb12"><el-descriptions-item label="漏洞">{{ result.finding.cwe }} / {{ result.finding.type }}</el-descriptions-item><el-descriptions-item label="复杂度">{{ result.routing_decision.context.complexity }}</el-descriptions-item><el-descriptions-item label="敏感级别">{{ result.routing_decision.context.sensitivity }}</el-descriptions-item><el-descriptions-item label="静态置信度">{{ result.routing_decision.context.confidence }}</el-descriptions-item><el-descriptions-item label="最终选择" :span="2"><el-tag type="success" effect="dark">{{ result.routing_decision.selected_provider }}</el-tag><span class="muted"> {{ result.routing_decision.selected_model || '' }}</span></el-descriptions-item><el-descriptions-item label="执行路径" :span="2">{{ result.routing_decision.execution_path.join(' → ') || '尚未记录' }}</el-descriptions-item></el-descriptions>
+          <el-table :data="result.routing_decision.candidates" size="small" stripe><el-table-column prop="provider" label="候选" width="110"/><el-table-column label="得分" width="90"><template #default="{ row }">{{ Number(row.score).toFixed(3) }}</template></el-table-column><el-table-column label="隐私" width="90"><template #default="{ row }"><el-tag size="small" :type="row.allowed ? 'success' : 'danger'">{{ row.allowed ? '允许' : '阻断' }}</el-tag></template></el-table-column><el-table-column label="可用" width="90"><template #default="{ row }"><el-tag size="small" :type="row.available ? 'success' : 'info'">{{ row.available ? '是' : '未配置' }}</el-tag></template></el-table-column><el-table-column prop="health" label="健康度" width="100"/><el-table-column label="理由" min-width="160"><template #default="{ row }">{{ row.reasons.join(', ') || '-' }}</template></el-table-column></el-table>
+          <div class="reason-codes"><el-tag v-for="code in result.routing_decision.reason_codes" :key="code" size="small" effect="plain">{{ code }}</el-tag></div>
+        </el-card></el-col>
+        <el-col :span="12"><el-card shadow="hover" class="panel"><template #header><strong>② 历史案例召回 · 正案例指导 / 负案例约束</strong></template><el-table :data="result.historical_matches" size="small" stripe><el-table-column label="案例" min-width="170"><template #default="{ row }">{{ row.case.case_id }}</template></el-table-column><el-table-column label="性质" width="90"><template #default="{ row }"><el-tag :type="row.case.outcome === 'POSITIVE' ? 'success' : 'danger'" size="small">{{ row.case.outcome === 'POSITIVE' ? '正案例' : '负案例' }}</el-tag></template></el-table-column><el-table-column label="相似度" width="90"><template #default="{ row }">{{ (row.similarity * 100).toFixed(1) }}%</template></el-table-column><el-table-column label="Trust" width="80"><template #default="{ row }">{{ row.case.trust_score.toFixed(2) }}</template></el-table-column><el-table-column label="策略" min-width="180"><template #default="{ row }">{{ row.case.strategy }}</template></el-table-column></el-table><el-empty v-if="!result.historical_matches.length" description="没有达到阈值的历史案例"/></el-card></el-col>
+      </el-row>
+      <el-row :gutter="16" class="section-row">
+        <el-col :span="12"><el-card shadow="hover" class="panel"><template #header><strong>③ Patch Candidate</strong></template><el-descriptions :column="2" border size="small"><el-descriptions-item label="Provider">{{ result.patch.provider }}</el-descriptions-item><el-descriptions-item label="Strategy">{{ result.patch.strategy }}</el-descriptions-item><el-descriptions-item label="使用正案例" :span="2">{{ (result.patch.historical_cases_used || []).join(', ') || '-' }}</el-descriptions-item><el-descriptions-item label="规避负案例" :span="2">{{ (result.patch.historical_cases_avoided || []).join(', ') || '-' }}</el-descriptions-item></el-descriptions><pre class="code-box">{{ result.patch.diff || 'No diff' }}</pre></el-card></el-col>
+        <el-col :span="12"><el-card shadow="hover" class="panel"><template #header><div class="header-flex"><strong>④ 确定性补丁验证</strong><el-tag :type="result.verification.passed ? 'success' : 'danger'" effect="dark">{{ result.verification.passed ? 'VERIFIED' : 'FAILED' }}</el-tag></div></template><el-table :data="result.verification.checks" size="small" stripe><el-table-column prop="name" label="Check" width="130"/><el-table-column label="状态" width="90"><template #default="{ row }"><el-tag size="small" :type="row.status === 'pass' ? 'success' : row.status === 'fail' ? 'danger' : 'info'">{{ row.status.toUpperCase() }}</el-tag></template></el-table-column><el-table-column prop="details" label="证据" min-width="280"/><el-table-column prop="input" label="失败输入" min-width="120"/></el-table></el-card></el-col>
+      </el-row>
+      <el-card shadow="hover" class="section-row evolution-card"><template #header><div class="header-flex"><strong>⑤ 案例库自进化 · Verification-gated Writeback</strong><el-tag :type="result.evolved_case.outcome === 'POSITIVE' ? 'success' : 'danger'" effect="dark">{{ result.evolved_case.outcome }} CASE CREATED</el-tag></div></template><el-descriptions :column="4" border><el-descriptions-item label="Case ID">{{ result.evolved_case.case_id }}</el-descriptions-item><el-descriptions-item label="CWE">{{ result.evolved_case.cwe }}</el-descriptions-item><el-descriptions-item label="Trust">{{ result.evolved_case.trust_score.toFixed(2) }}</el-descriptions-item><el-descriptions-item label="策略">{{ result.evolved_case.strategy }}</el-descriptions-item><el-descriptions-item v-if="result.evolved_case.failure_reason" label="失败原因" :span="4">{{ result.evolved_case.failure_reason }}</el-descriptions-item></el-descriptions><h4>案例进化事件</h4><el-timeline><el-timeline-item v-for="event in result.events.slice(0, 10)" :key="event.event_id" :timestamp="formatTime(event.created_at)"><el-tag size="small" :type="eventType(event.event_type)">{{ event.event_type }}</el-tag><strong class="event-case">{{ event.case_id }}</strong><span class="muted"> {{ event.metadata?.similarity ? `similarity=${event.metadata.similarity}` : '' }}</span></el-timeline-item></el-timeline></el-card>
+    </template>
+    <el-empty v-else description="选择场景后运行完整闭环，页面将展示真实 RoutingDecision 与 Case Evolution 证据"/>
+  </div>
+</template>
+<script setup lang="ts">
+import { onMounted, reactive, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { getCompetitionDemoState, resetCompetitionDemo, runCompetitionDemo } from '@/api'
+import type { DemoRunRequest, DemoRunResponse } from '@/api/types'
+const running = ref(false); const result = ref<DemoRunResponse | null>(null); const stats = ref<Record<string, number>>({})
+const form = reactive<DemoRunRequest>({ scenario:'path_evolution', sensitivity:'public', mode:'live', repair_variant:'auto', simulate_provider_failure:false })
+async function refreshState(){try{const {data}=await getCompetitionDemoState();stats.value=data.case_stats||{};result.value=data.latest_run||null}catch{}}
+async function runDemo(){running.value=true;try{const {data}=await runCompetitionDemo({...form});result.value=data;stats.value=data.case_stats;ElMessage.success(data.verification.passed?'闭环完成：补丁已验证并写入正案例':'闭环完成：失败补丁已作为负案例写回')}catch(error:any){ElMessage.error(error?.response?.data?.detail||error?.message||'Demo 执行失败')}finally{running.value=false}}
+async function resetDemo(){try{const {data}=await resetCompetitionDemo();result.value=null;stats.value=data.case_stats||{};ElMessage.success('Demo 已重置到种子案例状态')}catch(error:any){ElMessage.error(error?.response?.data?.detail||'重置失败')}}
+function formatTime(ts:string){try{return new Date(ts).toLocaleTimeString('zh-CN')}catch{return ts}}
+function eventType(type:string){if(type.includes('FAILURE'))return 'danger';if(type.includes('SUCCESS')||type.includes('PROMOTED')||type.includes('CREATED'))return 'success';return 'info'}
+onMounted(refreshState)
+</script>
+<style lang="scss" scoped>
+.competition-page{display:flex;flex-direction:column;gap:16px}.hero{border-left:5px solid #409eff}.hero-row,.header-flex{display:flex;justify-content:space-between;align-items:center;gap:16px}.hero h2{margin:0 0 8px}.hero p{margin:0;color:#606266}.controls :deep(.el-form-item){margin-bottom:12px}.stats-row,.section-row{margin-top:0}.panel{height:100%}.mb12{margin-bottom:12px}.reason-codes{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}.code-box{max-height:360px;overflow:auto;background:#121826;color:#d7e0ea;padding:14px;border-radius:8px;font-size:12px;line-height:1.55;white-space:pre-wrap}.muted{color:#909399;font-size:12px}.event-case{margin-left:8px}.evolution-card{border-top:3px solid #67c23a}h4{margin:18px 0 10px}
+</style>

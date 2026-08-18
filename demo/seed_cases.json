@@ -1,0 +1,80 @@
+[
+  {
+    "case_id": "CASE-SEED-CWE89-POS",
+    "cwe": "CWE-89",
+    "vulnerability_type": "SQL Injection",
+    "language": "java",
+    "framework": "JDBC",
+    "outcome": "POSITIVE",
+    "strategy": "parameterized prepared statement",
+    "original_code": "String sql = \"SELECT ...\" + userId;",
+    "patched_code": "PreparedStatement stmt = conn.prepareStatement(\"SELECT ... WHERE id=?\"); stmt.setString(1, userId);",
+    "trust_score": 0.97,
+    "evidence_refs": ["seed-verification-sql"],
+    "metadata": {"seed": true, "demo": false}
+  },
+  {
+    "case_id": "CASE-SEED-CWE89-NEG",
+    "cwe": "CWE-89",
+    "vulnerability_type": "SQL Injection",
+    "language": "java",
+    "framework": "JDBC",
+    "outcome": "NEGATIVE",
+    "strategy": "escape single quotes manually",
+    "failure_reason": "Manual quote escaping did not cover database-specific encoding/comment bypasses.",
+    "trust_score": 0.92,
+    "evidence_refs": ["seed-negative-sql"],
+    "metadata": {"seed": true, "demo": false}
+  },
+  {
+    "case_id": "CASE-SEED-CWE22-POS",
+    "cwe": "CWE-22",
+    "vulnerability_type": "Path Traversal",
+    "language": "java",
+    "framework": "generic",
+    "outcome": "POSITIVE",
+    "strategy": "normalize + base-directory containment",
+    "original_code": "new File(base, filename)",
+    "patched_code": "Path target = base.resolve(filename).normalize(); if (!target.startsWith(base.normalize())) throw new SecurityException();",
+    "trust_score": 0.96,
+    "evidence_refs": ["seed-verification-path"],
+    "metadata": {"seed": true, "demo": false}
+  },
+  {
+    "case_id": "CASE-SEED-CWE22-NEG",
+    "cwe": "CWE-22",
+    "vulnerability_type": "Path Traversal",
+    "language": "java",
+    "framework": "generic",
+    "outcome": "NEGATIVE",
+    "strategy": "string replace ../",
+    "failure_reason": "Nested and platform-specific traversal variants can bypass literal string replacement.",
+    "trust_score": 0.94,
+    "evidence_refs": ["seed-negative-path"],
+    "metadata": {"seed": true, "demo": false}
+  },
+  {
+    "case_id": "CASE-SEED-CWE78-POS",
+    "cwe": "CWE-78",
+    "vulnerability_type": "Command Injection",
+    "language": "java",
+    "framework": "generic",
+    "outcome": "POSITIVE",
+    "strategy": "fixed executable + argument array + allowlist",
+    "trust_score": 0.91,
+    "evidence_refs": ["seed-verification-command"],
+    "metadata": {"seed": true, "demo": false}
+  },
+  {
+    "case_id": "CASE-SEED-CWE79-POS",
+    "cwe": "CWE-79",
+    "vulnerability_type": "Cross-Site Scripting (XSS)",
+    "language": "javascript",
+    "framework": "web",
+    "outcome": "POSITIVE",
+    "strategy": "context-aware output encoding",
+    "trust_score": 0.90,
+    "evidence_refs": ["seed-verification-xss"],
+    "metadata": {"seed": true, "demo": false}
+  }
+]

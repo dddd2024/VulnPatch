@@ -1,0 +1,6 @@
+{
+  "provider": "deepseek",
+  "model": "deepseek-chat",
+  "strategy": "normalize + base-directory containment",
+  "reason": "Recorded model response for explicit offline replay. Verification and case writeback still execute live."
+}
