@@ -112,7 +112,12 @@ class ModelRouter:
         )
 
     def health(self, provider: str) -> str:
-        return self._health.get(provider, "healthy")
+        if provider in self._health:
+            return self._health[provider]
+        profile = next((item for item in self.profiles() if item.provider == provider), None)
+        if profile is not None and not self._provider_available(profile):
+            return "unavailable"
+        return "healthy"
 
     def set_health(self, provider: str, state: str) -> None:
         if state not in {"healthy", "degraded", "unavailable"}:

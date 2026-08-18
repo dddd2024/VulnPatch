@@ -58,11 +58,14 @@ def test_ollama_enabled_false_is_authoritative(monkeypatch):
     router = ModelRouter()
     ollama = next(profile for profile in router.profiles() if profile.provider == "ollama")
     assert router._provider_available(ollama) is False
+    assert router.health("ollama") == "unavailable"
 
     decision = router.select(RoutingContext(complexity="high", confidence=0.60, sensitivity="confidential"))
     candidate = next(item for item in decision.candidates if item.provider == "ollama")
     assert candidate.available is False
+    assert candidate.health == "unavailable"
     assert "NOT_CONFIGURED" in candidate.reasons
+    assert "HEALTH_UNAVAILABLE" in candidate.reasons
 
 
 def test_weak_path_patch_becomes_verification_failure_and_safe_patch_passes():
