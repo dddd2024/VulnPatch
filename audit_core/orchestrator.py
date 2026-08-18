@@ -1,8 +1,8 @@
 """Primary audit orchestration boundary.
 
 The orchestrator owns ingestion, language-aware analyzer dispatch, resilient
-agent execution, evidence construction and result summarization.  Provider
-selection remains abstract through ``LLMClientFactory``.
+agent execution, evidence construction, CVE-candidate assessment and result
+summarization. Provider selection remains abstract through ``LLMClientFactory``.
 """
 from __future__ import annotations
 
@@ -143,6 +143,37 @@ class AuditOrchestrator:
     def _stage(success: bool = True, **metrics: Any) -> dict[str, Any]:
         return {"success": success, "error": None if success else metrics.pop("error", None), "metrics": metrics}
 
+    @staticmethod
+    def _evaluate_cve_candidates(
+        findings: list[RawFinding],
+        code_units: list[CodeUnit],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Evaluate CVE candidacy without making the primary scan fail.
+
+        CVE review is an enrichment stage.  Its failure is surfaced in pipeline
+        metadata, but analyzer/repair workflows remain available.
+        """
+        if not findings:
+            return [], {"success": True, "error": None, "metrics": {"candidate_count": 0}}
+        try:
+            from cve_candidate.evaluator import CveCandidateEvaluator
+
+            evaluator = CveCandidateEvaluator()
+            results = evaluator.evaluate_batch(findings, code_units=code_units)
+            payloads = [result.model_dump(mode="json") for result in results]
+            candidates = sum(1 for result in payloads if result.get("cve_candidate"))
+            return payloads, {
+                "success": True,
+                "error": None,
+                "metrics": {"assessment_count": len(payloads), "candidate_count": candidates},
+            }
+        except Exception as exc:
+            return [], {
+                "success": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "metrics": {"assessment_count": 0, "candidate_count": 0},
+            }
+
     def _scan_units(self, code_units: list[CodeUnit]) -> AuditResult:
         stage_results: dict[str, dict[str, Any]] = {}
         all_logs: list[AgentLog] = []
@@ -210,6 +241,9 @@ class AuditOrchestrator:
                 evidence.append(bundle)
         stage_results["evidence"] = self._stage(True, evidence_count=len(evidence))
 
+        cve_candidates, cve_stage = self._evaluate_cve_candidates(findings, code_units)
+        stage_results["cve_candidate"] = cve_stage
+
         risks = [score_finding(f, decisions.get(f.id))["risk_score"] for f in findings]
         summary = AuditSummary(
             total_code_units=len(code_units),
@@ -230,4 +264,5 @@ class AuditOrchestrator:
             evidence=evidence,
             agent_logs=all_logs,
             metadata=metadata,
+            cve_candidates=cve_candidates,
         )
