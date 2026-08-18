@@ -1,22 +1,104 @@
 <template>
   <div class="knowledge-page">
-    <el-card shadow="hover"><template #header><div class="header-flex"><div><strong>自进化案例库</strong><span class="subtitle"> · 经过验证的成功与失败经验</span></div><el-button size="small" @click="load">刷新</el-button></div></template>
-      <el-row :gutter="12" class="stats"><el-col :span="6"><el-statistic title="案例总数" :value="stats.total"/></el-col><el-col :span="6"><el-statistic title="高可信案例" :value="stats.high_trust"/></el-col><el-col :span="6"><el-statistic title="负案例" :value="stats.negative"/></el-col><el-col :span="6"><el-statistic title="比赛闭环新增" :value="stats.demo_created"/></el-col></el-row>
-      <el-alert title="这里展示的是动态 RepairCase，不是静态 CWE 文案。只有经过 Verification 的补丁才会写回；失败补丁会成为负案例约束后续修复。" type="success" :closable="false" show-icon class="notice"/>
-      <h3>案例进化时间线</h3><el-table :data="events" stripe size="small" v-loading="loading"><el-table-column prop="created_at" label="时间" width="180"><template #default="{ row }">{{ formatTime(row.created_at) }}</template></el-table-column><el-table-column prop="event_type" label="事件" width="180"><template #default="{ row }"><el-tag size="small" :type="eventType(row.event_type)">{{ row.event_type }}</el-tag></template></el-table-column><el-table-column prop="case_id" label="Case ID" min-width="190"/><el-table-column label="元数据" min-width="240"><template #default="{ row }">{{ compact(row.metadata) }}</template></el-table-column></el-table>
-      <h3>当前 Repair Cases</h3><el-table :data="cases" stripe size="small" v-loading="loading"><el-table-column prop="case_id" label="Case ID" min-width="190"/><el-table-column prop="cwe" label="CWE" width="100"/><el-table-column prop="language" label="语言" width="90"/><el-table-column label="性质" width="100"><template #default="{ row }"><el-tag :type="row.outcome === 'POSITIVE' ? 'success' : 'danger'" size="small">{{ row.outcome }}</el-tag></template></el-table-column><el-table-column prop="strategy" label="策略" min-width="250"/><el-table-column label="Trust" width="90"><template #default="{ row }">{{ row.trust_score.toFixed(2) }}</template></el-table-column><el-table-column prop="retrieved_count" label="召回" width="80"/><el-table-column prop="successful_reuse_count" label="成功复用" width="100"/></el-table>
+    <el-card shadow="hover">
+      <template #header>
+        <div class="header-flex">
+          <div><strong>自进化案例库</strong><span class="subtitle"> · 经过验证的成功与失败经验</span></div>
+          <el-button size="small" @click="load">刷新</el-button>
+        </div>
+      </template>
+
+      <el-row :gutter="12" class="stats">
+        <el-col :span="6"><el-statistic title="案例总数" :value="stats.total" /></el-col>
+        <el-col :span="6"><el-statistic title="高可信案例" :value="stats.high_trust" /></el-col>
+        <el-col :span="6"><el-statistic title="负案例" :value="stats.negative" /></el-col>
+        <el-col :span="6"><el-statistic title="比赛闭环新增" :value="stats.demo_created" /></el-col>
+      </el-row>
+
+      <el-alert title="这里展示的是动态 RepairCase，不是静态 CWE 文案。只有经过 Verification 的补丁才会写回；失败补丁会成为负案例约束后续修复。"
+        type="success" :closable="false" show-icon class="notice" />
+
+      <h3>案例进化时间线</h3>
+      <el-table :data="events" stripe size="small" v-loading="loading">
+        <el-table-column prop="created_at" label="时间" width="180"><template #default="{ row }">{{ formatTime(row.created_at) }}</template></el-table-column>
+        <el-table-column prop="event_type" label="事件" width="180">
+          <template #default="{ row }"><el-tag size="small" :type="eventType(row.event_type)">{{ row.event_type }}</el-tag></template>
+        </el-table-column>
+        <el-table-column prop="case_id" label="Case ID" min-width="190" />
+        <el-table-column label="元数据" min-width="240"><template #default="{ row }">{{ compact(row.metadata) }}</template></el-table-column>
+      </el-table>
+
+      <h3>当前 Repair Cases</h3>
+      <el-table :data="cases" stripe size="small" v-loading="loading">
+        <el-table-column prop="case_id" label="Case ID" min-width="190" />
+        <el-table-column prop="cwe" label="CWE" width="100" />
+        <el-table-column prop="language" label="语言" width="90" />
+        <el-table-column label="性质" width="100">
+          <template #default="{ row }"><el-tag :type="row.outcome === 'POSITIVE' ? 'success' : 'danger'" size="small">{{ row.outcome }}</el-tag></template>
+        </el-table-column>
+        <el-table-column prop="strategy" label="策略" min-width="250" />
+        <el-table-column label="Trust" width="90"><template #default="{ row }">{{ row.trust_score.toFixed(2) }}</template></el-table-column>
+        <el-table-column prop="retrieved_count" label="召回" width="80" />
+        <el-table-column prop="successful_reuse_count" label="成功复用" width="100" />
+      </el-table>
     </el-card>
-    <el-card shadow="hover" class="static-card"><template #header><strong>静态 CWE 基础知识（辅助层）</strong></template><el-row :gutter="12"><el-col :span="8" v-for="cwe in cweList" :key="cwe.id" class="cwe-col"><el-card shadow="never" class="cwe-card"><div><el-tag :type="cwe.level === 'high' ? 'danger' : 'warning'" size="small">{{ cwe.id }}</el-tag> <strong>{{ cwe.name }}</strong></div><p>{{ cwe.description }}</p></el-card></el-col></el-row></el-card>
+
+    <el-card shadow="hover" class="static-card">
+      <template #header><strong>静态 CWE 基础知识（辅助层）</strong></template>
+      <el-row :gutter="12">
+        <el-col :span="8" v-for="cwe in cweList" :key="cwe.id" class="cwe-col">
+          <el-card shadow="never" class="cwe-card">
+            <div><el-tag :type="cwe.level === 'high' ? 'danger' : 'warning'" size="small">{{ cwe.id }}</el-tag> <strong>{{ cwe.name }}</strong></div>
+            <p>{{ cwe.description }}</p>
+          </el-card>
+        </el-col>
+      </el-row>
+    </el-card>
   </div>
 </template>
+
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { getCaseEvents, getCompetitionDemoState, getRepairCases } from '@/api'
 import type { CaseEvent, RepairCase } from '@/api/types'
-const loading=ref(false);const cases=ref<RepairCase[]>([]);const events=ref<CaseEvent[]>([]);const stats=ref({total:0,high_trust:0,negative:0,demo_created:0})
-async function load(){loading.value=true;try{const [caseRes,eventRes,stateRes]=await Promise.all([getRepairCases({limit:200}),getCaseEvents(200),getCompetitionDemoState()]);cases.value=caseRes.data;events.value=eventRes.data;stats.value={...stats.value,...(stateRes.data.case_stats||{})}}finally{loading.value=false}}
-function formatTime(ts:string){try{return new Date(ts).toLocaleString('zh-CN')}catch{return ts}} function compact(v:any){const text=JSON.stringify(v||{});return text.length>120?`${text.slice(0,117)}...`:text} function eventType(type:string){if(type.includes('FAILURE'))return 'danger';if(type.includes('CREATED')||type.includes('PROMOTED')||type.includes('SUCCESS'))return 'success';return 'info'}
-const cweList=[{id:'CWE-89',name:'SQL 注入',description:'用户输入参与 SQL 结构拼接。',level:'high'},{id:'CWE-22',name:'路径遍历',description:'用户路径逃逸允许目录。',level:'high'},{id:'CWE-78',name:'命令注入',description:'不可信输入进入操作系统命令。',level:'high'},{id:'CWE-79',name:'XSS',description:'不可信数据进入浏览器可执行上下文。',level:'medium'},{id:'CWE-502',name:'不安全反序列化',description:'反序列化不可信对象。',level:'high'},{id:'CWE-918',name:'SSRF',description:'攻击者控制服务器请求目标。',level:'high'}]
+
+const loading = ref(false)
+const cases = ref<RepairCase[]>([])
+const events = ref<CaseEvent[]>([])
+const stats = ref({ total: 0, high_trust: 0, negative: 0, demo_created: 0 })
+
+async function load() {
+  loading.value = true
+  try {
+    const [caseRes, eventRes, stateRes] = await Promise.all([getRepairCases({ limit: 200 }), getCaseEvents(200), getCompetitionDemoState()])
+    cases.value = caseRes.data
+    events.value = eventRes.data
+    stats.value = { ...stats.value, ...(stateRes.data.case_stats || {}) }
+  } finally { loading.value = false }
+}
+function formatTime(ts: string) { try { return new Date(ts).toLocaleString('zh-CN') } catch { return ts } }
+function compact(v: any) { const text = JSON.stringify(v || {}); return text.length > 120 ? `${text.slice(0, 117)}...` : text }
+function eventType(type: string) { if (type.includes('FAILURE')) return 'danger'; if (type.includes('CREATED') || type.includes('PROMOTED') || type.includes('SUCCESS')) return 'success'; return 'info' }
+
+const cweList = [
+  { id: 'CWE-89', name: 'SQL 注入', description: '用户输入参与 SQL 结构拼接。', level: 'high' },
+  { id: 'CWE-22', name: '路径遍历', description: '用户路径逃逸允许目录。', level: 'high' },
+  { id: 'CWE-78', name: '命令注入', description: '不可信输入进入操作系统命令。', level: 'high' },
+  { id: 'CWE-79', name: 'XSS', description: '不可信数据进入浏览器可执行上下文。', level: 'medium' },
+  { id: 'CWE-502', name: '不安全反序列化', description: '反序列化不可信对象。', level: 'high' },
+  { id: 'CWE-918', name: 'SSRF', description: '攻击者控制服务器请求目标。', level: 'high' },
+]
 onMounted(load)
 </script>
-<style scoped lang="scss">.knowledge-page{display:flex;flex-direction:column;gap:16px}.header-flex{display:flex;align-items:center;justify-content:space-between}.subtitle{color:#909399;font-weight:normal}.stats{text-align:center}.notice{margin:18px 0}h3{margin:24px 0 12px}.cwe-col{margin-bottom:12px}.cwe-card{height:100%}.cwe-card p{color:#909399;font-size:13px;margin:8px 0 0}</style>
+
+<style scoped lang="scss">
+.knowledge-page { display: flex; flex-direction: column; gap: 16px; }
+.header-flex { display: flex; align-items: center; justify-content: space-between; }
+.subtitle { color: #909399; font-weight: normal; }
+.stats { text-align: center; }
+.notice { margin: 18px 0; }
+h3 { margin: 24px 0 12px; }
+.cwe-col { margin-bottom: 12px; }
+.cwe-card { height: 100%; }
+.cwe-card p { color: #909399; font-size: 13px; margin: 8px 0 0; }
+</style>
