@@ -131,6 +131,16 @@ class ModelRouter:
             target = min(1.0, target + 0.08)
         return target
 
+    @staticmethod
+    def _missing_required_capabilities(profile: ModelProfile, context: RoutingContext) -> list[str]:
+        required = {
+            capability.strip()
+            for capability in context.required_capabilities
+            if capability and capability.strip()
+        }
+        provided = {capability.strip() for capability in profile.capabilities if capability and capability.strip()}
+        return sorted(required - provided)
+
     def _score(self, profile: ModelProfile, context: RoutingContext, health: str) -> float:
         weights = {
             "capability": 0.45,
@@ -177,24 +187,34 @@ class ModelRouter:
 
     def select(self, context: RoutingContext) -> RoutingDecision:
         candidates: list[RoutingCandidate] = []
+        candidate_profiles: dict[str, ModelProfile] = {}
         privacy_cfg = (self._config.get("privacy") or {}).get(context.sensitivity, {}) or {}
         cloud_allowed = bool(privacy_cfg.get("cloud_allowed", context.sensitivity != "confidential"))
 
         for profile in self.profiles():
+            candidate_profiles[profile.provider] = profile
             available = self._provider_available(profile)
             state = self.health(profile.provider)
             allowed = profile.local or cloud_allowed
+            missing_capabilities = self._missing_required_capabilities(profile, context)
+            requirements_met = not missing_capabilities
             reasons: list[str] = []
             if not available:
                 reasons.append("NOT_CONFIGURED")
             if not allowed:
                 reasons.append("PRIVACY_POLICY_BLOCKED")
+            if missing_capabilities:
+                reasons.append(f"MISSING_REQUIRED_CAPABILITIES:{','.join(missing_capabilities)}")
             if state == "degraded":
                 reasons.append("HEALTH_DEGRADED")
             if state == "unavailable":
                 reasons.append("HEALTH_UNAVAILABLE")
 
-            score = self._score(profile, context, state) if available and allowed and state != "unavailable" else 0.0
+            score = (
+                self._score(profile, context, state)
+                if available and allowed and requirements_met and state != "unavailable"
+                else 0.0
+            )
             candidates.append(RoutingCandidate(
                 provider=profile.provider,
                 model=profile.model,
@@ -206,19 +226,61 @@ class ModelRouter:
                 reasons=reasons,
             ))
 
-        viable = [c for c in candidates if c.available and c.allowed and c.health != "unavailable"]
-        if not viable:
-            fallback = RoutingCandidate(
-                provider="rule_engine",
-                model="deterministic-security-rules",
-                local=True,
-                available=True,
-                allowed=True,
-                health="healthy",
-                score=0.5,
-                reasons=["EMERGENCY_LOCAL_FALLBACK"],
+        viable = [
+            candidate
+            for candidate in candidates
+            if (
+                candidate.available
+                and candidate.allowed
+                and candidate.health != "unavailable"
+                and not any(reason.startswith("MISSING_REQUIRED_CAPABILITIES:") for reason in candidate.reasons)
             )
-            candidates.append(fallback)
+        ]
+        selected_missing_capabilities: list[str] = []
+        if not viable:
+            fallback = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if candidate.provider == "rule_engine"
+                    and candidate.available
+                    and candidate.allowed
+                    and candidate.health != "unavailable"
+                ),
+                None,
+            )
+            if fallback is None:
+                fallback_profile = candidate_profiles.get("rule_engine")
+                fallback = RoutingCandidate(
+                    provider="rule_engine",
+                    model=(fallback_profile.model if fallback_profile else "deterministic-security-rules"),
+                    local=True,
+                    available=True,
+                    allowed=True,
+                    health="healthy",
+                    score=0.5,
+                    reasons=["EMERGENCY_LOCAL_FALLBACK"],
+                )
+                candidates.append(fallback)
+            elif "EMERGENCY_LOCAL_FALLBACK" not in fallback.reasons:
+                fallback.reasons.append("EMERGENCY_LOCAL_FALLBACK")
+                fallback.score = max(fallback.score, 0.5)
+
+            fallback_profile = candidate_profiles.get("rule_engine")
+            if fallback_profile is not None:
+                selected_missing_capabilities = self._missing_required_capabilities(fallback_profile, context)
+            else:
+                selected_missing_capabilities = sorted(
+                    {
+                        capability.strip()
+                        for capability in context.required_capabilities
+                        if capability and capability.strip()
+                    }
+                )
+            if selected_missing_capabilities:
+                missing_reason = f"MISSING_REQUIRED_CAPABILITIES:{','.join(selected_missing_capabilities)}"
+                if missing_reason not in fallback.reasons:
+                    fallback.reasons.append(missing_reason)
             viable = [fallback]
 
         viable.sort(key=lambda item: item.score, reverse=True)
@@ -239,6 +301,8 @@ class ModelRouter:
             reason_codes.append("CLOUD_ALLOWED")
         if context.sensitivity == "confidential":
             reason_codes.append("CLOUD_BLOCKED_BY_PRIVACY")
+        if selected_missing_capabilities:
+            reason_codes.append("REQUIRED_CAPABILITIES_UNMET_FALLBACK")
 
         decision = RoutingDecision(
             context=context,
@@ -248,6 +312,16 @@ class ModelRouter:
             reason_codes=reason_codes,
             fallback_chain=fallback_chain,
             execution_path=[],
+            metadata={
+                "required_capabilities": sorted(
+                    {
+                        capability.strip()
+                        for capability in context.required_capabilities
+                        if capability and capability.strip()
+                    }
+                ),
+                "selected_missing_capabilities": selected_missing_capabilities,
+            },
         )
         self._decisions.append(decision)
         return decision
