@@ -1,13 +1,12 @@
 """Deterministic patch verification agent.
 
 The agent combines language syntax/compile checks, a fresh static rescan and
-CWE-specific security/regression probes.  It never treats an LLM statement as
+CWE-specific security/regression probes. It never treats an LLM statement as
 verification evidence.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import re
 import shutil
@@ -88,20 +87,40 @@ class VerificationAgent:
             metadata={**code_unit.metadata, "verification_rescan": True},
         )
         residual: list[RawFinding] = []
+        analyzer_errors: list[dict[str, str]] = []
+        completed_analyzers = 0
         try:
             registry = build_default_registry()
-            for analyzer in registry.get_analyzers():
+            analyzers = list(registry.get_analyzers())
+            if not analyzers:
+                return VerificationCheck(
+                    name="static_rescan",
+                    status="skipped",
+                    passed=False,
+                    details="rescan unavailable: analyzer registry is empty",
+                )
+            for analyzer in analyzers:
+                analyzer_name = getattr(analyzer, "name", analyzer.__class__.__name__)
                 try:
-                    for candidate in analyzer.analyze([patched_unit]):
+                    candidates = analyzer.analyze([patched_unit])
+                    completed_analyzers += 1
+                    for candidate in candidates:
                         same_cwe = bool(finding.cwe and candidate.cwe and candidate.cwe.lower() == finding.cwe.lower())
                         same_type = candidate.type.lower().replace(" ", "_") == finding.type.lower().replace(" ", "_")
                         if same_cwe or same_type:
                             residual.append(candidate)
-                except Exception:
-                    # A failing optional analyzer should not fabricate evidence.
-                    continue
+                except Exception as exc:
+                    analyzer_errors.append({
+                        "analyzer": str(analyzer_name),
+                        "error": str(exc)[:500],
+                    })
         except Exception as exc:
-            return VerificationCheck(name="static_rescan", status="skipped", passed=False, details=f"rescan unavailable: {exc}")
+            return VerificationCheck(
+                name="static_rescan",
+                status="skipped",
+                passed=False,
+                details=f"rescan unavailable: {exc}",
+            )
 
         if residual:
             return VerificationCheck(
@@ -109,22 +128,70 @@ class VerificationAgent:
                 status="fail",
                 passed=False,
                 details=f"{len(residual)} matching finding(s) remain after patch",
-                metadata={"residual_finding_ids": [item.id for item in residual]},
+                metadata={
+                    "residual_finding_ids": [item.id for item in residual],
+                    "completed_analyzers": completed_analyzers,
+                    "analyzer_errors": analyzer_errors,
+                },
             )
-        return VerificationCheck(name="static_rescan", status="pass", passed=True, details="No matching finding remained on rescan")
+
+        if analyzer_errors:
+            return VerificationCheck(
+                name="static_rescan",
+                status="skipped",
+                passed=False,
+                details=(
+                    f"rescan incomplete: {len(analyzer_errors)} analyzer(s) failed; "
+                    "absence of findings is not accepted as verification evidence"
+                ),
+                metadata={
+                    "completed_analyzers": completed_analyzers,
+                    "analyzer_errors": analyzer_errors,
+                },
+            )
+
+        if completed_analyzers == 0:
+            return VerificationCheck(
+                name="static_rescan",
+                status="skipped",
+                passed=False,
+                details="rescan unavailable: no analyzer completed",
+            )
+
+        return VerificationCheck(
+            name="static_rescan",
+            status="pass",
+            passed=True,
+            details=f"No matching finding remained on rescan ({completed_analyzers} analyzer(s) completed)",
+            metadata={"completed_analyzers": completed_analyzers},
+        )
 
     @staticmethod
     def _path_policy(patched_code: str) -> str:
-        compact = patched_code.replace(" ", "")
-        robust = (
-            (".normalize()" in compact or "getCanonicalPath(" in compact or ".toRealPath(" in compact)
-            and (".startsWith(" in compact or "startsWith(" in compact)
-        )
+        compact = re.sub(r"\s+", "", patched_code)
         weak_replace = 'replace("../",""' in compact or "replace('../',''" in compact
-        if robust:
-            return "containment"
         if weak_replace:
             return "weak_replace"
+
+        # A containment check is only evidence when a normalized/canonical target
+        # is guarded by a negative startsWith condition whose body rejects access.
+        target_assignments = re.finditer(
+            r"\b(?:Path|String|var)\s+([A-Za-z_$][\w$]*)\s*=\s*"
+            r"[^;]*(?:\.normalize\(\)|getCanonicalPath\(\)|\.toRealPath\([^;]*\))[^;]*;",
+            patched_code,
+            flags=re.DOTALL,
+        )
+        for assignment in target_assignments:
+            target_var = re.escape(assignment.group(1))
+            guard = re.compile(
+                rf"if\s*\(\s*!\s*{target_var}\s*\.startsWith\s*\(.*?\)\s*\)"
+                rf"\s*\{{(?P<body>.*?)\}}",
+                flags=re.DOTALL,
+            )
+            for match in guard.finditer(patched_code):
+                if re.search(r"\bthrow\b", match.group("body")):
+                    return "containment"
+
         return "unprotected"
 
     @classmethod
@@ -174,8 +241,6 @@ class VerificationAgent:
             metadata={"policy": policy, "vectors": anti_vectors},
         )
 
-        # Current path policies do not reject normal relative filenames; keep the
-        # check explicit so evolution trust is grounded in regression evidence.
         regression_ok = policy in {"containment", "weak_replace", "unprotected"} and bool(allowed_vectors)
         regression = VerificationCheck(
             name="regression",
@@ -253,7 +318,6 @@ class VerificationAgent:
         required = ["static_rescan", "poc", "regression", "anti_bypass"]
         by_name = {check.name: check for check in checks}
         passed = all(name in by_name and by_name[name].status == "pass" for name in required)
-        # Compile/syntax, when actually executed, must not fail.
         passed = passed and not any(
             check.name in {"compile", "syntax"} and check.status == "fail"
             for check in checks
