@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  pull_request:
 
 permissions:
   contents: read
@@ -14,9 +15,11 @@ jobs:
     steps:
       - name: Checkout exact main commit
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Record source commit
-        run: printf '%s\n' "$GITHUB_SHA" > SOURCE_COMMIT.txt
+        run: git rev-parse HEAD > SOURCE_COMMIT.txt
 
       - name: Remove Git metadata
         run: rm -rf .git
@@ -24,7 +27,7 @@ jobs:
       - name: Upload source snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: VulnPatch-main-${{ github.sha }}
+          name: VulnPatch-main-${{ github.run_id }}
           path: .
           include-hidden-files: true
           if-no-files-found: error
