@@ -127,8 +127,10 @@ class AnalysisAgent(AnalysisAgentBase):
         Returns:
             Tuple of (AgentHypothesis, AgentLog)
         """
-        # Build prompt for LLM
-        prompt = self._build_llm_prompt(finding, code_unit)
+        # Retrieve knowledge *before* the LLM call so RAG can actually
+        # influence the analysis rather than being metadata-only.
+        rag_context, rag_context_ids = self._retrieve_rag_context(finding, code_unit)
+        prompt = self._build_llm_prompt(finding, code_unit, rag_context=rag_context)
         
         # Call LLM
         response = self._llm_client.generate(
@@ -147,9 +149,6 @@ class AnalysisAgent(AnalysisAgentBase):
         
         # Get CWE ID
         cwe_id = get_cwe_id(finding.type)
-        
-        # Retrieve RAG context
-        rag_context, rag_context_ids = self._retrieve_rag_context(finding, code_unit)
         
         # Map finding type to vulnerability type for consistency
         # First try exact match, then try snake_case version
@@ -223,6 +222,7 @@ Always consider real-world attack scenarios."""
         self,
         finding: RawFinding,
         code_unit: CodeUnit | None = None,
+        rag_context: list[dict[str, Any]] | None = None,
     ) -> str:
         """
         Build prompt for LLM analysis - professional security audit format.
@@ -237,6 +237,7 @@ Always consider real-world attack scenarios."""
         prompt_parts = [
             f"## Security Finding Analysis",
             f"",
+            f"**Vulnerability Type**: {finding.type}",
             f"**Finding Type**: {finding.type}",
             f"**CWE**: {finding.cwe}",
             f"**Severity**: {finding.severity}",
@@ -262,6 +263,17 @@ Always consider real-world attack scenarios."""
                 f"```",
             ])
         
+        if rag_context:
+            prompt_parts.extend([
+                "",
+                "**Retrieved security knowledge (use as grounded context):**",
+            ])
+            for item in rag_context[:3]:
+                prompt_parts.append(
+                    f"- {item.get('cwe_id', '')} {item.get('title', '')}: "
+                    f"{item.get('summary', '')} Remediation: {item.get('remediation', '')}"
+                )
+
         prompt_parts.extend([
             f"",
             f"Provide a comprehensive security analysis following the What-Why-How framework.",

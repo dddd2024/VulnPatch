@@ -20,6 +20,10 @@ from knowledge.cwe_mapper import (
 )
 from knowledge.rag_retriever import RagRetriever
 from knowledge.vuln_graph import VulnerabilityGraph
+from knowledge.case_models import RepairCase, CaseEvent, CaseMatch, VerificationResult, VerificationCheck
+from knowledge.case_store import CaseStore
+from knowledge.case_retriever import CaseRetriever
+from knowledge.case_evolver import CaseEvolver
 
 __all__ = [
     # Expanded knowledge base
@@ -37,4 +41,12 @@ __all__ = [
     "RagRetriever",
     # Vulnerability graph
     "VulnerabilityGraph",
+    "RepairCase",
+    "CaseEvent",
+    "CaseMatch",
+    "VerificationResult",
+    "VerificationCheck",
+    "CaseStore",
+    "CaseRetriever",
+    "CaseEvolver",
 ]

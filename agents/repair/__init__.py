@@ -1,0 +1,1 @@
+"""Repair agent registration package."""

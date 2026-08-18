@@ -15,8 +15,12 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+from env_config import load_project_env
+load_project_env()
+
 from api.schemas import ScanRequest, ScanResponse
 from api.auth import router as auth_router
+from api.competition_demo import router as competition_demo_router
 from api.state import audit_state
 from api.database import init_db
 
@@ -56,8 +60,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 注册认证路由
+# 注册认证与比赛演示路由
 app.include_router(auth_router, prefix="/api")
+app.include_router(competition_demo_router, prefix="/api")
 
 
 # ---------------------------------------------------------------------------

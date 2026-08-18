@@ -31,4 +31,26 @@ class ScanResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     """Response model for /health endpoint."""
-  
+
+
+class CompetitionDemoRequest(BaseModel):
+    """Run one auditable competition showcase scenario."""
+    scenario: Literal["simple_sql", "path_evolution", "similar_path"] = "path_evolution"
+    sensitivity: Literal["public", "internal", "confidential"] = "public"
+    mode: Literal["live", "replay"] = "live"
+    repair_variant: Literal["auto", "safe", "weak"] = "auto"
+    simulate_provider_failure: bool = False
+
+
+class CompetitionDemoResponse(BaseModel):
+    run_id: str
+    scenario: str
+    mode: str
+    finding: dict
+    routing_decision: dict
+    historical_matches: list[dict]
+    patch: dict
+    verification: dict
+    evolved_case: dict
+    case_stats: dict
+    events: list[dict]

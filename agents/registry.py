@@ -89,6 +89,10 @@ class AgentRegistry:
         """Return the registered verification agent (by role name ``verification``)."""
         return self.get("verification")
 
+    def get_repair(self) -> Optional["BaseAgent"]:
+        """Return the registered repair agent (by role name ``repair``)."""
+        return self.get("repair")
+
 
 def build_default_agent_registry() -> AgentRegistry:
     """

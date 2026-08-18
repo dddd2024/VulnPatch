@@ -9,6 +9,8 @@ import type {
   HealthStatus,
 } from './types'
 
+export type { ScanRequest } from './types'
+
 const http = axios.create({
   baseURL: '/api',
   timeout: 120000,
@@ -64,10 +66,10 @@ export const getReportJson = (scanId?: string) =>
   http.get('/report/json', { params: scanId ? { scan_id: scanId } : {} })
 
 export const getReportMarkdown = (scanId?: string) =>
-  http.get('/report/markdown', { params: scanId ? { scan_id: scanId } : {} }, { responseType: 'text' } as any)
+  http.get('/report/markdown', { params: scanId ? { scan_id: scanId } : {}, responseType: 'text' })
 
 export const getReportHtml = (scanId?: string) =>
-  http.get('/report/html', { params: scanId ? { scan_id: scanId } : {} }, { responseType: 'text' } as any)
+  http.get('/report/html', { params: scanId ? { scan_id: scanId } : {}, responseType: 'text' })
 
 // 获取扫描历史
 export const getScanHistory = () => http.get('/scans')
@@ -79,3 +81,13 @@ export const login = (username: string, password: string) =>
 export const getAuthStatus = () => http.get('/auth/status')
 
 export default http
+
+// 自主调度 / 案例进化
+export const getRoutingDecisions = () => http.get<import('./types').RoutingDecision[]>('/routing/decisions')
+export const getRepairCases = (params?: { cwe?: string; outcome?: string; limit?: number }) =>
+  http.get<import('./types').RepairCase[]>('/cases', { params })
+export const getCaseEvents = (limit = 200) =>
+  http.get<import('./types').CaseEvent[]>('/cases/events', { params: { limit } })
+export const getCaseRetrievals = (limit = 200) =>
+  http.get<import('./types').CaseEvent[]>('/cases/retrievals', { params: { limit } })
+export const getModelHealth = () => http.get('/models/health')

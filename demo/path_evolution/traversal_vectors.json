@@ -1,0 +1,14 @@
+{
+  "allowed": [
+    "report.pdf",
+    "docs/readme.txt",
+    "images/logo.png"
+  ],
+  "blocked": [
+    "../secret.txt",
+    "../../etc/passwd",
+    "....//secret.txt",
+    "..\\secret.txt",
+    "folder/../../secret.txt"
+  ]
+}

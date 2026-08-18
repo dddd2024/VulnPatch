@@ -1,0 +1,51 @@
+weights:
+  capability: 0.45
+  privacy: 0.20
+  health: 0.15
+  cost: 0.10
+  latency: 0.10
+
+providers:
+  rule_engine:
+    model: deterministic-security-rules
+    local: true
+    enabled: true
+    capability: 0.48
+    cost: 0.00
+    latency: 0.05
+    capabilities: [pattern_fix, deterministic_fix, patch_generation, offline]
+
+  ollama:
+    model: qwen2.5-coder:7b
+    local: true
+    enabled: true
+    capability: 0.72
+    cost: 0.02
+    latency: 0.45
+    capabilities: [code_reasoning, patch_generation, privacy]
+
+  deepseek:
+    model: deepseek-chat
+    local: false
+    enabled: true
+    capability: 0.88
+    cost: 0.18
+    latency: 0.34
+    capabilities: [code_reasoning, patch_generation, cross_file]
+
+  openai:
+    model: gpt-4o-mini
+    local: false
+    enabled: true
+    capability: 0.92
+    cost: 0.35
+    latency: 0.30
+    capabilities: [code_reasoning, patch_generation, cross_file]
+
+privacy:
+  confidential:
+    cloud_allowed: false
+  internal:
+    cloud_allowed: true
+  public:
+    cloud_allowed: true

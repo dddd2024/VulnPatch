@@ -140,3 +140,58 @@ export interface ScanRecord {
   created_at: string
   updated_at: string
 }
+
+// 自主多模型调度 + 案例库自进化
+export interface RoutingCandidate {
+  provider: string
+  model?: string
+  local: boolean
+  available: boolean
+  allowed: boolean
+  health: 'healthy' | 'degraded' | 'unavailable'
+  score: number
+  reasons: string[]
+}
+
+export interface RoutingDecision {
+  decision_id: string
+  created_at: string
+  selected_provider: string
+  selected_model?: string
+  reason_codes: string[]
+  fallback_chain: string[]
+  execution_path: string[]
+  candidates: RoutingCandidate[]
+  context: Record<string, any>
+  metadata: Record<string, any>
+}
+
+export interface RepairCase {
+  case_id: string
+  cwe?: string
+  vulnerability_type: string
+  language: string
+  outcome: 'POSITIVE' | 'NEGATIVE'
+  strategy: string
+  trust_score: number
+  failure_reason?: string
+  retrieved_count: number
+  successful_reuse_count: number
+  metadata: Record<string, any>
+  created_at: string
+}
+
+export interface CaseMatch {
+  case: RepairCase
+  similarity: number
+  reasons: string[]
+}
+
+export interface CaseEvent {
+  event_id: string
+  case_id: string
+  event_type: string
+  scan_id?: string
+  metadata: Record<string, any>
+  created_at: string
+}
