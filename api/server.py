@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from env_config import load_project_env
 load_project_env()
 
-from api.schemas import ScanRequest, ScanResponse
+from api.schemas import ScanRequest, ScanResponse, RepairRequest, RepairResponse
 from api.auth import router as auth_router
 from api.competition_demo import router as competition_demo_router
 from api.state import audit_state
@@ -70,198 +70,30 @@ app.include_router(competition_demo_router, prefix="/api")
 # ---------------------------------------------------------------------------
 
 def _run_scan_pipeline(request: ScanRequest) -> dict[str, Any]:
-    """
-    执行完整的扫描流水线：
-    1. 代码加载 → CodeUnit
-    2. 静态分析 → RawFinding
-    3. 结果合并
-    4. 评分
-    5. 构建证据
-    6. 持久化
-    7. 返回结果
-    """
-    from audit_core.models import (
-        CodeUnit, RawFinding, AuditResult, AuditSummary,
-        EvidenceBundle, AgentLog,
+    """Run the formal AuditOrchestrator pipeline and persist the AuditResult."""
+    from audit_core.orchestrator import AuditOrchestrator
+
+    language = request.language
+    if request.input_type == "code" and (not language or language == "auto"):
+        language = "python"
+    orchestrator = AuditOrchestrator(use_pipeline=True)
+    result = orchestrator.scan(
+        input_type=request.input_type,
+        code=request.code,
+        repo_path=request.repo_path,
+        repo_url=request.repo_url,
+        language=language,
     )
-    from audit_core.scoring import score_finding
-    from audit_core.result_merger import merge_findings
-    from audit_core.registry import build_default_registry
-    from ingest.language_router import detect_language_by_path
-
-    # --- 1. 加载代码单元 ---
-    code_units: list[CodeUnit] = []
-    languages: set[str] = set()
-    scanned_files: list[str] = []
-
-    if request.input_type == "code":
-        lang = request.language if request.language and request.language != "auto" else "python"
-        code_units.append(CodeUnit(
-            path="<code_input>",
-            language=lang,
-            content=request.code or "",
-        ))
-        languages.add(lang)
-        scanned_files.append("<code_input>")
-
-    elif request.input_type == "path":
-        repo_path = request.repo_path or ""
-        if not os.path.isdir(repo_path):
-            raise HTTPException(status_code=400, detail=f"路径不存在: {repo_path}")
-
-        for root, dirs, files in os.walk(repo_path):
-            # 跳过隐藏目录和常见非代码目录
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in (
-                'node_modules', '__pycache__', '.git', 'venv', '.venv', 'dist', 'build',
-            )]
-            for fname in files:
-                fpath = os.path.join(root, fname)
-                lang = detect_language_by_path(fpath)
-                if lang == "unknown":
-                    continue
-                try:
-                    with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()
-                    if content.strip():
-                        code_units.append(CodeUnit(
-                            path=os.path.relpath(fpath, repo_path),
-                            language=lang,
-                            content=content,
-                        ))
-                        languages.add(lang)
-                        scanned_files.append(os.path.relpath(fpath, repo_path))
-                except Exception:
-                    continue
-
-    elif request.input_type == "github":
-        # GitHub 仓库: 尝试克隆
-        repo_url = request.repo_url or ""
-        if not repo_url:
-            raise HTTPException(status_code=400, detail="GitHub URL 不能为空")
-        try:
-            import tempfile, subprocess
-            tmp_dir = tempfile.mkdtemp(prefix="vulnpatch_")
-            subprocess.run(
-                ["git", "clone", "--depth", "1", repo_url, tmp_dir],
-                capture_output=True, timeout=120, check=True,
-            )
-            # 扫描克隆的仓库
-            for root, dirs, files in os.walk(tmp_dir):
-                dirs[:] = [d for d in dirs if not d.startswith('.') and d not in (
-                    'node_modules', '__pycache__', '.git', 'venv', '.venv',
-                )]
-                for fname in files:
-                    fpath = os.path.join(root, fname)
-                    lang = detect_language_by_path(fpath)
-                    if lang == "unknown":
-                        continue
-                    try:
-                        with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                            content = f.read()
-                        if content.strip():
-                            rel_path = os.path.relpath(fpath, tmp_dir)
-                            code_units.append(CodeUnit(
-                                path=rel_path,
-                                language=lang,
-                                content=content,
-                            ))
-                            languages.add(lang)
-                            scanned_files.append(rel_path)
-                    except Exception:
-                        continue
-        except FileNotFoundError:
-            raise HTTPException(status_code=500, detail="git 命令不可用，请安装 git")
-        except subprocess.CalledProcessError as e:
-            raise HTTPException(status_code=400, detail=f"克隆仓库失败: {e.stderr.decode()[:200]}")
-        except subprocess.TimeoutExpired:
-            raise HTTPException(status_code=408, detail="克隆仓库超时")
-
-    if not code_units:
+    if request.input_type != "code" and result.summary.total_code_units == 0:
         raise HTTPException(status_code=400, detail="未找到可扫描的代码文件")
-
-    # --- 2. 运行分析器 ---
-    all_findings: list[RawFinding] = []
-    agent_logs: list[AgentLog] = []
-    try:
-        registry = build_default_registry()
-        analyzers = registry.get_analyzers()
-        for analyzer in analyzers:
-            try:
-                findings = analyzer.analyze(code_units)
-                all_findings.extend(findings)
-                agent_logs.append(AgentLog(
-                    agent_name=analyzer.name,
-                    stage="analysis",
-                    message=f"{analyzer.name} 完成，发现 {len(findings)} 个问题",
-                ))
-            except Exception as e:
-                logger.warning("Analyzer %s failed: %s", analyzer.name, e)
-                agent_logs.append(AgentLog(
-                    agent_name=analyzer.name,
-                    stage="analysis",
-                    message=f"{analyzer.name} 执行失败: {e}",
-                ))
-    except Exception as e:
-        logger.warning("Failed to build analyzer registry: %s", e)
-
-    # --- 3. 合并结果 ---
-    merged_findings = merge_findings(all_findings)
-
-    # --- 4. 评分和构建证据 ---
-    evidence_bundles: list[EvidenceBundle] = []
-    for finding in merged_findings:
-        score_result = score_finding(finding)
-        finding.metadata["score_breakdown"] = score_result
-
-        # 提取代码片段
-        snippet = None
-        for unit in code_units:
-            if unit.path == finding.file_path:
-                lines = unit.content.split('\n')
-                start = max(0, finding.start_line - 3)
-                end = min(len(lines), (finding.end_line or finding.start_line) + 3)
-                snippet = '\n'.join(lines[start:end])
-                break
-
-        snippet_dict = {"content": snippet, "language": finding.file_path} if snippet else None
-        evidence_bundles.append(EvidenceBundle(
-            finding=finding,
-            snippets=[snippet_dict] if snippet_dict else [],
-            cwe_info={"cwe_id": finding.cwe} if finding.cwe else {},
-            score_breakdown=score_result,
-        ))
-
-    # --- 5. 构建摘要 ---
-    risk_scores = [score_finding(f)["risk_score"] for f in merged_findings]
-    avg_risk = sum(risk_scores) / len(risk_scores) if risk_scores else 0.0
-
-    summary = AuditSummary(
-        total_code_units=len(code_units),
-        total_findings=len(merged_findings),
-        total_evidence_bundles=len(evidence_bundles),
-        risk_score=round(avg_risk, 1),
-        languages=sorted(languages),
-        scanned_files=scanned_files[:50],  # 限制数量
-    )
-
-    result = AuditResult(
-        summary=summary,
-        findings=merged_findings,
-        evidence=evidence_bundles,
-        agent_logs=agent_logs,
-    )
-
-    # --- 6. 持久化 ---
     scan_id = audit_state.create_session(result)
-
-    # --- 7. 返回 ---
     return {
         "scan_id": scan_id,
-        "summary": summary.model_dump(mode="json"),
-        "findings": [f.model_dump(mode="json") for f in merged_findings],
-        "evidence": [e.model_dump(mode="json") for e in evidence_bundles],
-        "agent_logs": [l.model_dump(mode="json") for l in agent_logs],
-        "cve_candidates": [],
+        "summary": result.summary.model_dump(mode="json"),
+        "findings": [f.model_dump(mode="json") for f in result.findings],
+        "evidence": [e.model_dump(mode="json") for e in result.evidence],
+        "agent_logs": [l.model_dump(mode="json") for l in result.agent_logs],
+        "cve_candidates": list(result.cve_candidates),
     }
 
 
@@ -269,12 +101,14 @@ def _run_scan_pipeline(request: ScanRequest) -> dict[str, Any]:
 # API 路由
 # ===========================================================================
 
+@app.get("/health", include_in_schema=False)
 @app.get("/api/health")
 def health_check():
     """健康检查"""
     return {"status": "ok"}
 
 
+@app.post("/scan", response_model=ScanResponse, response_model_exclude={"cve_candidates"}, include_in_schema=False)
 @app.post("/api/scan", response_model=ScanResponse)
 def scan(request: ScanRequest):
     """
@@ -302,6 +136,69 @@ def scan(request: ScanRequest):
         raise HTTPException(status_code=500, detail=f"扫描失败: {str(e)}")
 
 
+def _repair_context(finding, code_unit, request: RepairRequest):
+    from llm.routing_models import RoutingContext
+    confidence = {"high": 0.95, "medium": 0.65, "low": 0.35}.get((finding.confidence or "").lower(), 0.5)
+    cwe = (finding.cwe or "").upper()
+    is_simple_sql = cwe == "CWE-89" and confidence >= 0.85
+    required = ["deterministic_fix"] if is_simple_sql else ["patch_generation"]
+    verification_requirements = ["sql_parameterization", "anti_bypass"] if cwe == "CWE-89" else ["anti_bypass"]
+    return RoutingContext(
+        finding_id=finding.id,
+        cwe=finding.cwe,
+        vulnerability_type=finding.type,
+        language=code_unit.language,
+        complexity="low" if is_simple_sql else "high",
+        confidence=confidence,
+        sensitivity=request.sensitivity,
+        file_count=1,
+        cross_file=False,
+        required_capabilities=required,
+        metadata={"source": "product_repair", "verification_requirements": verification_requirements},
+    )
+
+
+@app.post("/api/repair", response_model=RepairResponse)
+def repair_finding(request: RepairRequest):
+    """Repair one finding from a persisted scan through the shared RepairPipeline."""
+    from audit_core.repair_pipeline import RepairPipeline
+
+    result = audit_state.get_by_id(request.scan_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Scan {request.scan_id} not found")
+    finding = next((item for item in result.findings if item.id == request.finding_id), None)
+    if finding is None:
+        raise HTTPException(status_code=404, detail=f"Finding {request.finding_id} not found")
+    evidence = next((item for item in result.evidence if item.finding.id == finding.id), None)
+    code_unit = evidence.code_unit if evidence is not None else None
+    if code_unit is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This scan predates repair-ready evidence. Re-run the scan to retain the source CodeUnit.",
+        )
+
+    execution = RepairPipeline().run(
+        finding=finding,
+        code_unit=code_unit,
+        context=_repair_context(finding, code_unit, request),
+        scan_id=request.scan_id,
+        variant=request.repair_variant,
+        framework="generic",
+        case_metadata={"demo": False, "source": "product_repair", "scan_id": request.scan_id},
+    )
+    return {
+        "run_id": execution["run_id"],
+        "finding": finding.model_dump(mode="json"),
+        "routing_decision": execution["routing_decision"].model_dump(mode="json"),
+        "historical_matches": [m.model_dump(mode="json") for m in execution["historical_matches"]],
+        "patch": execution["patch"].model_dump(mode="json"),
+        "verification": execution["verification"].model_dump(mode="json"),
+        "verification_log": execution["verification_log"].model_dump(mode="json"),
+        "evolved_case": execution["evolved_case"].model_dump(mode="json"),
+    }
+
+
+@app.get("/findings", include_in_schema=False)
 @app.get("/api/findings")
 def get_findings(scan_id: Optional[str] = Query(None)):
     """获取漏洞发现列表"""
@@ -311,6 +208,7 @@ def get_findings(scan_id: Optional[str] = Query(None)):
     return [f.model_dump(mode="json") for f in result.findings]
 
 
+@app.get("/evidence", include_in_schema=False)
 @app.get("/api/evidence")
 def get_evidence(scan_id: Optional[str] = Query(None)):
     """获取证据包列表"""
@@ -320,6 +218,7 @@ def get_evidence(scan_id: Optional[str] = Query(None)):
     return [e.model_dump(mode="json") for e in result.evidence]
 
 
+@app.get("/agents/logs", include_in_schema=False)
 @app.get("/api/agents/logs")
 def get_agent_logs(scan_id: Optional[str] = Query(None)):
     """获取 Agent 执行日志"""
@@ -329,6 +228,7 @@ def get_agent_logs(scan_id: Optional[str] = Query(None)):
     return [l.model_dump(mode="json") for l in result.agent_logs]
 
 
+@app.get("/report/json", include_in_schema=False)
 @app.get("/api/report/json")
 def get_report_json(scan_id: Optional[str] = Query(None)):
     """获取 JSON 格式的完整审计报告"""
@@ -338,6 +238,7 @@ def get_report_json(scan_id: Optional[str] = Query(None)):
     return result.model_dump(mode="json")
 
 
+@app.get("/report/markdown", include_in_schema=False)
 @app.get("/api/report/markdown")
 def get_report_markdown(scan_id: Optional[str] = Query(None)):
     """获取 Markdown 格式的审计报告"""
@@ -351,6 +252,7 @@ def get_report_markdown(scan_id: Optional[str] = Query(None)):
     return PlainTextResponse(content=content, media_type="text/markdown; charset=utf-8")
 
 
+@app.get("/report/html", include_in_schema=False)
 @app.get("/api/report/html")
 def get_report_html(scan_id: Optional[str] = Query(None)):
     """获取 HTML 格式的审计报告"""
@@ -362,6 +264,42 @@ def get_report_html(scan_id: Optional[str] = Query(None)):
     content = build_html_report(result)
     from fastapi.responses import HTMLResponse
     return HTMLResponse(content=content)
+
+
+@app.get("/scans/{scan_id}/findings", include_in_schema=False)
+def legacy_scan_findings(scan_id: str):
+    return get_findings(scan_id)
+
+
+@app.get("/scans/{scan_id}/evidence", include_in_schema=False)
+def legacy_scan_evidence(scan_id: str):
+    return get_evidence(scan_id)
+
+
+@app.get("/scans/{scan_id}/agents/logs", include_in_schema=False)
+def legacy_scan_logs(scan_id: str):
+    return get_agent_logs(scan_id)
+
+
+@app.get("/scans/{scan_id}/report/json", include_in_schema=False)
+def legacy_scan_report(scan_id: str):
+    return get_report_json(scan_id)
+
+
+@app.get("/scans/{scan_id}/metadata", include_in_schema=False)
+@app.get("/api/scans/{scan_id}/metadata")
+def scan_metadata(scan_id: str):
+    result = _get_result(scan_id)
+    return result.metadata
+
+
+@app.get("/scans/{scan_id}/analyzer-info", include_in_schema=False)
+@app.get("/api/scans/{scan_id}/analyzer-info")
+def scan_analyzer_info(scan_id: str):
+    result = _get_result(scan_id)
+    return result.metadata.get("analyzer_info", {
+        "analyzer_runs": [], "analyzer_errors": [], "skipped_languages": []
+    })
 
 
 @app.get("/api/scans")

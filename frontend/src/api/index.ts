@@ -7,6 +7,8 @@ import type {
   AgentLogItem,
   TaskInfo,
   HealthStatus,
+  RepairRequest,
+  RepairResponse,
 } from './types'
 
 export type { ScanRequest } from './types'
@@ -48,6 +50,9 @@ export const submitAsyncScan = (data: ScanRequest) => http.post<{ task_id: strin
 
 // 任务状态
 export const getTaskStatus = (taskId: string) => http.get<TaskInfo>(`/tasks/${taskId}`)
+
+// 修复漏洞（正式产品入口）
+export const repairFinding = (data: RepairRequest) => http.post<RepairResponse>('/repair', data)
 
 // 获取发现
 export const getFindings = (scanId?: string) =>

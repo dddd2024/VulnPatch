@@ -6,6 +6,7 @@ about potential vulnerabilities using LLM or fallback logic.
 """
 
 from typing import Any
+from llm.base import LLMClientBase
 
 from audit_core.models import RawFinding, AgentHypothesis, AgentLog, CodeUnit
 from agents.interfaces import AnalysisAgentBase
@@ -61,7 +62,7 @@ class AnalysisAgent(AnalysisAgentBase):
 
     def __init__(
         self, 
-        llm_client: Any | None = None,
+        llm_client: LLMClientBase | None = None,
         rag_retriever: RagRetriever | None = None
     ) -> None:
         """
@@ -76,11 +77,11 @@ class AnalysisAgent(AnalysisAgentBase):
         self._llm_client = llm_client
         self._rag_retriever = rag_retriever or RagRetriever()
 
-    def get_llm_client(self) -> Any | None:
+    def get_llm_client(self) -> LLMClientBase | None:
         """Get the current LLM client."""
         return self._llm_client
 
-    def set_llm_client(self, llm_client: Any | None) -> None:
+    def set_llm_client(self, llm_client: LLMClientBase | None) -> None:
         """Set the LLM client."""
         self._llm_client = llm_client
 
@@ -328,6 +329,7 @@ Always consider real-world attack scenarios."""
             "line_number": finding.start_line,
             "has_code_context": code_unit is not None,
             "analysis_method": "fallback",
+            "llm_provider": None,
             "rag_context_count": len(rag_context),
             "rag_context_ids": rag_context_ids,
             "cwe_id": cwe_id,
@@ -353,6 +355,7 @@ Always consider real-world attack scenarios."""
             output_refs=[hypothesis.id],
             metadata={
                 "analysis_method": "fallback",
+                "llm_provider": None,
                 "vulnerability_type": vuln_type,
                 "confidence": confidence,
                 "cwe_id": cwe_id,

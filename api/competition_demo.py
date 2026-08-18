@@ -15,26 +15,23 @@ from fastapi import APIRouter, HTTPException, Query
 
 from api.schemas import CompetitionDemoRequest, CompetitionDemoResponse
 from audit_core.models import CodeUnit, RawFinding
+from audit_core.repair_pipeline import RepairPipeline
 from audit_core.registry import build_default_registry
-from agents.repair_agent import RepairAgent
-from agents.verification_agent import VerificationAgent
-from knowledge.case_evolver import CaseEvolver
 from knowledge.case_models import RepairCase
-from knowledge.case_retriever import CaseRetriever
 from knowledge.case_store import CaseStore
 from llm.model_router import ModelRouter
 from llm.routing_models import RoutingContext
+from llm.routing_store import RoutingDecisionStore
 
 router = APIRouter(tags=["competition-demo"])
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_ROOT = ROOT / "demo"
 
 _store = CaseStore()
-_retriever = CaseRetriever(_store)
-_evolver = CaseEvolver(_store)
 _model_router = ModelRouter()
-_repair = RepairAgent(_model_router)
-_verifier = VerificationAgent()
+_pipeline = RepairPipeline(store=_store, router=_model_router)
+_repair = _pipeline.repair_agent
+_routing_store = RoutingDecisionStore()
 _recent_runs: list[dict[str, Any]] = []
 
 SCENARIOS = {
@@ -151,33 +148,13 @@ def _record_case_reuse_results(
     scan_id: str,
     new_case_id: str,
 ) -> None:
-    """Attribute reuse outcomes only to cases the patch actually consumed.
-
-    Retrieval is recorded separately by CaseRetriever. Reuse success/failure
-    must not be assigned to every retrieved candidate: explicit weak/safe and
-    replay modes intentionally bypass history, and case-aware routing may select
-    only one positive case while merely avoiding specific negative strategies.
-    """
-    retrieved_ids = {match.case.case_id for match in matches}
-    roles: dict[str, str] = {}
-    for case_id in list(getattr(patch, "historical_cases_used", []) or []):
-        roles[case_id] = "used"
-    for case_id in list(getattr(patch, "historical_cases_avoided", []) or []):
-        roles.setdefault(case_id, "avoided")
-
-    for case_id, role in roles.items():
-        if case_id not in retrieved_ids:
-            continue
-        _store.mark_reuse_result(
-            case_id,
-            success=verification_passed,
-            scan_id=scan_id,
-            metadata={
-                "patch_id": getattr(patch, "patch_id", None),
-                "new_case_id": new_case_id,
-                "reuse_role": role,
-            },
-        )
+    """Compatibility helper delegating to the shared repair pipeline policy."""
+    RepairPipeline._record_case_reuse_results(
+        _store, matches, patch,
+        verification_passed=verification_passed,
+        scan_id=scan_id,
+        new_case_id=new_case_id,
+    )
 
 
 def _event_dicts(limit: int = 50) -> list[dict[str, Any]]:
@@ -185,71 +162,34 @@ def _event_dicts(limit: int = 50) -> list[dict[str, Any]]:
 
 
 def run_demo_pipeline(request: CompetitionDemoRequest) -> dict[str, Any]:
-    """Execute one complete, auditable backend validation iteration."""
+    """Execute a reproducible fixture through the shared product repair pipeline."""
     _ensure_seed_cases()
     run_id = f"demo-{uuid.uuid4().hex[:10]}"
     unit = _load_scenario(request.scenario)
     finding = _find_primary_finding(unit)
 
-    decision = _model_router.select(_routing_context(request, finding, unit))
-    if request.simulate_provider_failure and decision.selected_provider != "rule_engine":
-        failed = decision.selected_provider
-        _model_router.record_failure(decision, failed, "SIMULATED_COMPETITION_FAILURE")
-        decision.metadata["simulated_failure"] = True
-        decision.metadata["simulated_failed_provider"] = failed
-        decision.fallback_chain = [p for p in decision.fallback_chain if p != failed]
-        if not decision.fallback_chain:
-            decision.fallback_chain = ["rule_engine"]
-
-    matches = _retriever.retrieve(
-        finding,
-        language=unit.language,
-        code=unit.content,
-        top_k=6,
-        scan_id=run_id,
-        record_events=True,
-    )
-
     replay = _recorded_response(unit, finding) if request.mode == "replay" else None
-    patch = _repair.generate(
+    execution = _pipeline.run(
         finding=finding,
         code_unit=unit,
-        decision=decision,
-        historical_matches=matches,
+        context=_routing_context(request, finding, unit),
+        scan_id=run_id,
         variant=request.repair_variant,
         recorded_response=replay,
-    )
-
-    verification, verification_log = _verifier.run(
-        finding=finding,
-        code_unit=unit,
-        patch=patch,
         traversal_vectors=_load_traversal_vectors(),
-    )
-    case = _evolver.evolve(
-        finding=finding,
-        code_unit=unit,
-        patch=patch,
-        verification=verification,
-        scan_id=run_id,
-        evidence_refs=[decision.decision_id, verification.verification_id],
         framework="JDBC" if (finding.cwe or "").upper() == "CWE-89" else "generic",
-        metadata={
+        case_metadata={
             "demo": True,
             "scenario": request.scenario,
             "mode": request.mode,
             "repair_variant": request.repair_variant,
-            "routing_decision_id": decision.decision_id,
         },
+        simulate_selected_provider_failure=request.simulate_provider_failure,
+        failure_reason="SIMULATED_COMPETITION_FAILURE",
     )
 
-    _record_case_reuse_results(
-        matches,
-        patch,
-        verification_passed=verification.passed,
-        scan_id=run_id,
-        new_case_id=case.case_id,
-    )
+    decision = execution["routing_decision"]
+    case = execution["evolved_case"]
 
     result = {
         "run_id": run_id,
@@ -257,10 +197,10 @@ def run_demo_pipeline(request: CompetitionDemoRequest) -> dict[str, Any]:
         "mode": request.mode,
         "finding": finding.model_dump(mode="json"),
         "routing_decision": decision.model_dump(mode="json"),
-        "historical_matches": [match.model_dump(mode="json") for match in matches],
-        "patch": patch.model_dump(mode="json"),
-        "verification": verification.model_dump(mode="json"),
-        "verification_log": verification_log.model_dump(mode="json"),
+        "historical_matches": [m.model_dump(mode="json") for m in execution["historical_matches"]],
+        "patch": execution["patch"].model_dump(mode="json"),
+        "verification": execution["verification"].model_dump(mode="json"),
+        "verification_log": execution["verification_log"].model_dump(mode="json"),
         "evolved_case": case.model_dump(mode="json"),
         "case_stats": _case_stats(),
         "events": _event_dicts(),
@@ -278,11 +218,12 @@ def run_demo(request: CompetitionDemoRequest) -> CompetitionDemoResponse:
 
 @router.post("/demo/reset")
 def reset_demo() -> dict[str, Any]:
-    global _model_router, _repair
+    global _model_router, _pipeline, _repair
     removed = _store.reset_demo_cases()
     _recent_runs.clear()
     _model_router = ModelRouter()
-    _repair = RepairAgent(_model_router)
+    _pipeline = RepairPipeline(store=_store, router=_model_router)
+    _repair = _pipeline.repair_agent
     _ensure_seed_cases()
     return {"status": "ok", "removed_demo_cases": removed, "case_stats": _case_stats()}
 
@@ -299,7 +240,7 @@ def demo_state() -> dict[str, Any]:
 
 @router.get("/routing/decisions")
 def routing_decisions(limit: int = Query(20, ge=1, le=100)) -> list[dict[str, Any]]:
-    return [decision.model_dump(mode="json") for decision in _model_router.decisions[-limit:]][::-1]
+    return [decision.model_dump(mode="json") for decision in _routing_store.list(limit=limit)]
 
 
 @router.get("/models/health")
