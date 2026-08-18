@@ -1,6 +1,6 @@
-"""Competition-facing API for the two title capabilities.
+"""Backend validation API for autonomous routing and repair-case evolution.
 
-This router does not fabricate UI data.  Every card is derived from the same
+This router does not fabricate UI data. Every response is derived from the same
 objects used by the repair pipeline: RoutingDecision, CaseMatch,
 PatchCandidate, VerificationResult and RepairCase.
 """
@@ -97,9 +97,14 @@ def _routing_context(request: CompetitionDemoRequest, finding: RawFinding, unit:
     if request.scenario == "simple_sql":
         complexity = "low"
         capabilities = ["deterministic_fix"]
+        verification_requirements = ["sql_parameterization", "anti_bypass"]
     else:
         complexity = "high"
-        capabilities = ["code_reasoning", "patch_generation", "anti_bypass"]
+        # anti_bypass is a deterministic VerificationAgent requirement, not a
+        # model-provider capability. Providers must be able to generate a patch;
+        # the verifier independently establishes bypass resistance afterwards.
+        capabilities = ["patch_generation"]
+        verification_requirements = ["anti_bypass"]
     return RoutingContext(
         finding_id=finding.id,
         cwe=finding.cwe,
@@ -111,7 +116,11 @@ def _routing_context(request: CompetitionDemoRequest, finding: RawFinding, unit:
         file_count=1,
         cross_file=False,
         required_capabilities=capabilities,
-        metadata={"scenario": request.scenario, "competition_demo": True},
+        metadata={
+            "scenario": request.scenario,
+            "competition_demo": True,
+            "verification_requirements": verification_requirements,
+        },
     )
 
 
@@ -123,14 +132,52 @@ def _load_traversal_vectors() -> dict[str, list[str]]:
 def _recorded_response(unit: CodeUnit, finding: RawFinding) -> dict[str, Any]:
     path = DEMO_ROOT / "recorded_responses" / "safe_path_patch.json"
     data = json.loads(path.read_text(encoding="utf-8"))
-    # The recording intentionally stores model-level fields only. Reconstruct
-    # the recorded code candidate from the deterministic fixture so no stale
-    # source text can silently drift from the checked-in demo source.
+    # The checked-in recording supplies transport identity (provider/model),
+    # while the scenario-specific candidate is reconstructed from the current
+    # fixture. Always replace strategy/reason/code so replay cannot mislabel a
+    # SQL case with path-containment metadata from the recording file.
     patched, strategy, reason = _repair._rule_patch(finding, unit, variant="auto")
-    data.setdefault("patched_code", patched)
-    data.setdefault("strategy", strategy)
-    data.setdefault("reason", reason)
+    data["patched_code"] = patched
+    data["strategy"] = strategy
+    data["reason"] = f"Scenario-matched replay candidate. {reason}"
     return data
+
+
+def _record_case_reuse_results(
+    matches: list[Any],
+    patch: Any,
+    *,
+    verification_passed: bool,
+    scan_id: str,
+    new_case_id: str,
+) -> None:
+    """Attribute reuse outcomes only to cases the patch actually consumed.
+
+    Retrieval is recorded separately by CaseRetriever. Reuse success/failure
+    must not be assigned to every retrieved candidate: explicit weak/safe and
+    replay modes intentionally bypass history, and case-aware routing may select
+    only one positive case while merely avoiding specific negative strategies.
+    """
+    retrieved_ids = {match.case.case_id for match in matches}
+    roles: dict[str, str] = {}
+    for case_id in list(getattr(patch, "historical_cases_used", []) or []):
+        roles[case_id] = "used"
+    for case_id in list(getattr(patch, "historical_cases_avoided", []) or []):
+        roles.setdefault(case_id, "avoided")
+
+    for case_id, role in roles.items():
+        if case_id not in retrieved_ids:
+            continue
+        _store.mark_reuse_result(
+            case_id,
+            success=verification_passed,
+            scan_id=scan_id,
+            metadata={
+                "patch_id": getattr(patch, "patch_id", None),
+                "new_case_id": new_case_id,
+                "reuse_role": role,
+            },
+        )
 
 
 def _event_dicts(limit: int = 50) -> list[dict[str, Any]]:
@@ -138,7 +185,7 @@ def _event_dicts(limit: int = 50) -> list[dict[str, Any]]:
 
 
 def run_demo_pipeline(request: CompetitionDemoRequest) -> dict[str, Any]:
-    """Execute one complete, auditable demo iteration (also used by tests)."""
+    """Execute one complete, auditable backend validation iteration."""
     _ensure_seed_cases()
     run_id = f"demo-{uuid.uuid4().hex[:10]}"
     unit = _load_scenario(request.scenario)
@@ -196,13 +243,13 @@ def run_demo_pipeline(request: CompetitionDemoRequest) -> dict[str, Any]:
         },
     )
 
-    for match in matches:
-        _store.mark_reuse_result(
-            match.case.case_id,
-            success=verification.passed,
-            scan_id=run_id,
-            metadata={"patch_id": patch.patch_id, "new_case_id": case.case_id},
-        )
+    _record_case_reuse_results(
+        matches,
+        patch,
+        verification_passed=verification.passed,
+        scan_id=run_id,
+        new_case_id=case.case_id,
+    )
 
     result = {
         "run_id": run_id,
