@@ -24,6 +24,8 @@ from llm.routing_models import (
 
 
 _DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "model_routing.yaml"
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"0", "false", "no", "off"}
 
 
 class ModelRouter:
@@ -68,6 +70,18 @@ class ModelRouter:
             ))
         return profiles
 
+    @staticmethod
+    def _explicit_bool(name: str) -> bool | None:
+        raw = os.getenv(name)
+        if raw is None or not raw.strip():
+            return None
+        normalized = raw.strip().lower()
+        if normalized in _TRUE_VALUES:
+            return True
+        if normalized in _FALSE_VALUES:
+            return False
+        return None
+
     def _provider_available(self, profile: ModelProfile) -> bool:
         if profile.provider in self._availability_overrides:
             return self._availability_overrides[profile.provider]
@@ -76,9 +90,14 @@ class ModelRouter:
         if profile.provider == "rule_engine":
             return True
         if profile.provider == "ollama":
+            # An explicit OLLAMA_ENABLED value is authoritative. In particular,
+            # `false` must not be overridden merely because the example/default
+            # base URL is non-empty.
+            explicit = self._explicit_bool("OLLAMA_ENABLED")
+            if explicit is not None:
+                return explicit
             return bool(
-                os.getenv("OLLAMA_ENABLED", "").lower() in {"1", "true", "yes"}
-                or os.getenv("OLLAMA_BASE_URL")
+                os.getenv("OLLAMA_BASE_URL")
                 or os.getenv("LLM_PROVIDER", "").lower() == "ollama"
             )
         meta = PROVIDER_DEFAULTS.get(profile.provider, {})
@@ -118,8 +137,6 @@ class ModelRouter:
         }
 
         target = self._complexity_target(context)
-        # Reward capability close to or above what the task needs; avoid wasting a
-        # premium model on trivial/high-confidence findings.
         capability_fit = max(0.0, 1.0 - abs(profile.capability - target))
         if profile.capability >= target:
             capability_fit = min(1.0, capability_fit + 0.12)
@@ -140,14 +157,12 @@ class ModelRouter:
             + float(weights["latency"]) * latency_fit
         )
 
-        # Deterministic fast-path for simple findings.
         if context.complexity == "low" and context.confidence >= 0.85:
             if profile.provider == "rule_engine":
                 score += 0.28
             elif not profile.local:
                 score -= 0.18
 
-        # Cross-file reasoning should strongly prefer semantic models.
         if context.cross_file and "cross_file" in profile.capabilities:
             score += 0.08
         if context.cross_file and profile.provider == "rule_engine":
@@ -188,8 +203,6 @@ class ModelRouter:
 
         viable = [c for c in candidates if c.available and c.allowed and c.health != "unavailable"]
         if not viable:
-            # rule_engine is intended to be the guaranteed local safety net.  A
-            # malformed custom config should still produce an explicit decision.
             fallback = RoutingCandidate(
                 provider="rule_engine",
                 model="deterministic-security-rules",

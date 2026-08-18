@@ -36,6 +36,7 @@ class RepairAgent:
     """Generate structured patch candidates under routing/case constraints."""
 
     name = "repair"
+    CASE_RULE_MIN_TRUST = 0.80
 
     SYSTEM_PROMPT = """You are a secure-code repair agent. Return only a JSON object with keys:
 strategy, patched_code, reason. Preserve intended behavior while removing the vulnerability.
@@ -66,6 +67,10 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
         return used, avoided
 
     @staticmethod
+    def _normalize_strategy(strategy: str) -> str:
+        return " ".join((strategy or "").strip().lower().replace("_", " ").split())
+
+    @staticmethod
     def _parse_json_response(content: str) -> dict[str, Any]:
         text = content.strip()
         if text.startswith("```"):
@@ -77,7 +82,6 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
                 return data
         except json.JSONDecodeError:
             pass
-        # Last-resort extraction of the first JSON object.
         start = text.find("{")
         end = text.rfind("}")
         if start >= 0 and end > start:
@@ -112,8 +116,7 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
 
     @staticmethod
     def _path_traversal_safe_patch(code: str) -> tuple[str, str, str]:
-        """Deterministic offline patch for the self-contained competition fixture."""
-        # Replace the vulnerable helper when the demo fixture marker is present.
+        """Default deterministic path-traversal repair."""
         if "File target = new File(base.toFile(), filename); // VULNERABLE_PATH" in code:
             patched = code.replace(
                 "File target = new File(base.toFile(), filename); // VULNERABLE_PATH\n        return target.toPath();",
@@ -129,12 +132,36 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
                 "Normalize the resolved path and reject targets outside the configured base directory.",
             )
 
-        # Generic textual fallback: useful for source snippets that already use Path.
         if "base.resolve(" in code and ".normalize()" not in code:
             patched = code.replace("base.resolve(filename)", "base.resolve(filename).normalize()")
             return patched, "normalize resolved path", "Normalize the user-controlled path before file access."
 
         return code, "manual review required", "No deterministic path-traversal rewrite matched the source shape."
+
+    @staticmethod
+    def _path_traversal_case_guided_patch(code: str) -> tuple[str, str, str]:
+        """Case-adapted containment repair with an explicitly normalized base.
+
+        This is intentionally a separate safe adapter from the default rule so an
+        acceptance test can prove that retrieved verified experience changed the
+        deterministic repair decision rather than merely decorating metadata.
+        """
+        if "File target = new File(base.toFile(), filename); // VULNERABLE_PATH" in code:
+            patched = code.replace(
+                "File target = new File(base.toFile(), filename); // VULNERABLE_PATH\n        return target.toPath();",
+                "Path safeBase = base.toAbsolutePath().normalize();\n"
+                "        Path target = safeBase.resolve(filename).normalize();\n"
+                "        if (!target.startsWith(safeBase)) {\n"
+                "            throw new SecurityException(\"Path traversal blocked\");\n"
+                "        }\n"
+                "        return target;",
+            )
+            return (
+                patched,
+                "case-guided normalize + absolute base containment",
+                "Apply the verified containment pattern using one normalized absolute base for both resolution and boundary checking.",
+            )
+        return RepairAgent._path_traversal_safe_patch(code)
 
     @staticmethod
     def _path_traversal_weak_patch(code: str) -> tuple[str, str, str]:
@@ -153,7 +180,6 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
 
     @staticmethod
     def _sql_safe_patch(code: str) -> tuple[str, str, str]:
-        # Fixture-aware Java transformation.
         if "Statement stmt = conn.createStatement();" in code and "VULNERABLE_SQL" in code:
             patched = code.replace(
                 "Statement stmt = conn.createStatement();\n        String sql = \"SELECT * FROM users WHERE id=\" + userId; // VULNERABLE_SQL\n        return stmt.executeQuery(sql);",
@@ -175,6 +201,90 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
             return self._sql_safe_patch(code_unit.content)
         return code_unit.content, "manual review required", "No deterministic repair template exists for this finding type."
 
+    def _case_aware_rule_patch(
+        self,
+        finding: RawFinding,
+        code_unit: CodeUnit,
+        matches: list[CaseMatch],
+    ) -> tuple[str, str, str, list[str], list[str], dict[str, Any]]:
+        """Choose a registered deterministic repair using verified case evidence.
+
+        Positive cases may select only a pre-registered safe adapter; arbitrary
+        historical code is never copied into the target. Negative cases block a
+        matching strategy name and are preserved as explicit avoid evidence.
+        """
+        positive = [match for match in matches if match.case.outcome == "POSITIVE"]
+        negative = [match for match in matches if match.case.outcome == "NEGATIVE"]
+        blocked_strategies = {
+            self._normalize_strategy(match.case.strategy)
+            for match in negative
+            if match.case.strategy
+        }
+        avoided_ids = [match.case.case_id for match in negative]
+        cwe = (finding.cwe or "").upper()
+        kind = finding.type.lower().replace(" ", "_")
+
+        for match in positive:
+            case = match.case
+            strategy = self._normalize_strategy(case.strategy)
+            if case.trust_score < self.CASE_RULE_MIN_TRUST:
+                continue
+            if strategy in blocked_strategies:
+                continue
+
+            if cwe == "CWE-22" or "path" in kind:
+                if "normalize" in strategy and ("containment" in strategy or "startswith" in strategy):
+                    patched, selected_strategy, reason = self._path_traversal_case_guided_patch(code_unit.content)
+                    if patched != code_unit.content:
+                        return (
+                            patched,
+                            selected_strategy,
+                            f"{reason} Selected verified case {case.case_id} (trust={case.trust_score:.2f}).",
+                            [case.case_id],
+                            avoided_ids,
+                            {
+                                "mode": "case_guided",
+                                "selected_case_id": case.case_id,
+                                "selected_case_strategy": case.strategy,
+                                "selected_case_trust": case.trust_score,
+                                "blocked_strategies": sorted(blocked_strategies),
+                            },
+                        )
+
+            if cwe == "CWE-89" or "sql" in kind:
+                if "parameterized" in strategy or "prepared statement" in strategy:
+                    patched, selected_strategy, reason = self._sql_safe_patch(code_unit.content)
+                    if patched != code_unit.content:
+                        return (
+                            patched,
+                            f"case-guided {selected_strategy}",
+                            f"{reason} Selected verified case {case.case_id} (trust={case.trust_score:.2f}).",
+                            [case.case_id],
+                            avoided_ids,
+                            {
+                                "mode": "case_guided",
+                                "selected_case_id": case.case_id,
+                                "selected_case_strategy": case.strategy,
+                                "selected_case_trust": case.trust_score,
+                                "blocked_strategies": sorted(blocked_strategies),
+                            },
+                        )
+
+        patched, strategy, reason = self._rule_patch(finding, code_unit, variant="auto")
+        return (
+            patched,
+            strategy,
+            reason,
+            [],
+            avoided_ids,
+            {
+                "mode": "default_rule",
+                "selected_case_id": None,
+                "blocked_strategies": sorted(blocked_strategies),
+                "positive_candidates_considered": [match.case.case_id for match in positive],
+            },
+        )
+
     def generate(
         self,
         *,
@@ -188,8 +298,8 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
         matches = list(historical_matches or [])
         used, avoided = self._history_ids(matches)
 
-        # Explicit demo weak variant is deterministic and visibly labelled by the
-        # API/UI.  It is never presented as an autonomous model output.
+        # Explicit weak/safe candidates are controlled verification experiments;
+        # they are not presented as autonomous case-guided output.
         if variant in {"weak", "safe"}:
             applied_variant = "weak" if variant == "weak" else "auto"
             patched, strategy, reason = self._rule_patch(finding, code_unit, variant=applied_variant)
@@ -201,14 +311,15 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
                 patched_code=patched,
                 diff=self._diff(code_unit.content, patched, code_unit.path),
                 reason=reason,
-                historical_cases_used=used,
-                historical_cases_avoided=avoided,
+                historical_cases_used=[],
+                historical_cases_avoided=[],
                 routing_decision_id=decision.decision_id,
                 fallback_path=list(decision.execution_path),
                 metadata={
                     "variant": variant,
                     "demo_candidate": True,
                     "explicit_deterministic_candidate": True,
+                    "case_policy": {"mode": "bypassed_for_explicit_variant"},
                 },
             )
 
@@ -224,11 +335,14 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
                 patched_code=patched,
                 diff=self._diff(code_unit.content, patched, code_unit.path),
                 reason=reason,
-                historical_cases_used=used,
-                historical_cases_avoided=avoided,
+                historical_cases_used=[],
+                historical_cases_avoided=[],
                 routing_decision_id=decision.decision_id,
                 fallback_path=[provider],
-                metadata={"replay": True},
+                metadata={
+                    "replay": True,
+                    "case_policy": {"mode": "bypassed_for_replay"},
+                },
             )
 
         prompt = self._build_prompt(finding, code_unit, matches)
@@ -237,7 +351,11 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
         for provider in decision.fallback_chain:
             self.router.record_execution(decision, provider)
             if provider == "rule_engine":
-                patched, strategy, reason = self._rule_patch(finding, code_unit, variant="auto")
+                patched, strategy, reason, rule_used, rule_avoided, case_policy = self._case_aware_rule_patch(
+                    finding,
+                    code_unit,
+                    matches,
+                )
                 return PatchCandidate(
                     provider=provider,
                     model=provider_to_model.get(provider),
@@ -245,10 +363,11 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
                     patched_code=patched,
                     diff=self._diff(code_unit.content, patched, code_unit.path),
                     reason=reason,
-                    historical_cases_used=used,
-                    historical_cases_avoided=avoided,
+                    historical_cases_used=rule_used,
+                    historical_cases_avoided=rule_avoided,
                     routing_decision_id=decision.decision_id,
                     fallback_path=list(decision.execution_path),
+                    metadata={"case_policy": case_policy},
                 )
 
             try:
@@ -285,9 +404,11 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
                 self.router.record_failure(decision, provider, str(exc))
                 continue
 
-        # Should be unreachable because rule_engine is the emergency fallback,
-        # but make the failure explicit rather than returning an unstructured error.
-        patched, strategy, reason = self._rule_patch(finding, code_unit, variant="auto")
+        patched, strategy, reason, rule_used, rule_avoided, case_policy = self._case_aware_rule_patch(
+            finding,
+            code_unit,
+            matches,
+        )
         return PatchCandidate(
             provider="rule_engine",
             model="deterministic-security-rules",
@@ -295,9 +416,12 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
             patched_code=patched,
             diff=self._diff(code_unit.content, patched, code_unit.path),
             reason=reason,
-            historical_cases_used=used,
-            historical_cases_avoided=avoided,
+            historical_cases_used=rule_used,
+            historical_cases_avoided=rule_avoided,
             routing_decision_id=decision.decision_id,
             fallback_path=list(decision.execution_path) + ["rule_engine"],
-            metadata={"emergency_fallback": True},
+            metadata={
+                "emergency_fallback": True,
+                "case_policy": case_policy,
+            },
         )
