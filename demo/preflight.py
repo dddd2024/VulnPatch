@@ -17,9 +17,27 @@ from env_config import load_project_env
 load_project_env()
 
 
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"0", "false", "no", "off"}
+
+
 def check(name: str, ok: bool, detail: str = "") -> bool:
     print(f"{name:<28} {'PASS' if ok else 'FAIL'} {detail}".rstrip())
     return ok
+
+
+def _ollama_configured() -> bool:
+    raw = os.getenv("OLLAMA_ENABLED")
+    if raw is not None and raw.strip():
+        normalized = raw.strip().lower()
+        if normalized in _TRUE_VALUES:
+            return True
+        if normalized in _FALSE_VALUES:
+            return False
+    return bool(
+        os.getenv("OLLAMA_BASE_URL")
+        or os.getenv("LLM_PROVIDER", "").lower() == "ollama"
+    )
 
 
 def main() -> int:
@@ -55,14 +73,14 @@ def main() -> int:
     results.append(check("Java compiler", bool(javac), javac or "optional but recommended"))
 
     cloud = any(os.getenv(name) for name in ("DEEPSEEK_API_KEY", "OPENAI_API_KEY", "LLM_API_KEY"))
-    local = bool(os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_ENABLED", "").lower() in {"1", "true", "yes"})
+    local = _ollama_configured()
     check("Cloud model configured", cloud, "LIVE cloud route enabled" if cloud else "rule/replay fallback available")
     check("Local model configured", local, "Ollama route enabled" if local else "rule fallback available")
 
-    print("\nREADY FOR DEMO" if all(results[:-1]) else "\nPRECHECK HAS FAILURES")
-    # javac is useful but a skipped compiler check does not block deterministic
-    # security verification, so only core dependencies/fixtures/SQLite are fatal.
-    fatal = results[:4]
+    # Core dependencies, fixtures and writable SQLite are fatal. javac remains
+    # recommended but optional because syntax/compile checks can be reported as skipped.
+    fatal = results[:5]
+    print("\nREADY FOR DEMO" if all(fatal) else "\nPRECHECK HAS FAILURES")
     return 0 if all(fatal) else 1
 
 
