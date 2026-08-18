@@ -1,0 +1,31 @@
+name: source-package
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact main commit
+        uses: actions/checkout@v4
+
+      - name: Record source commit
+        run: printf '%s\n' "$GITHUB_SHA" > SOURCE_COMMIT.txt
+
+      - name: Remove Git metadata
+        run: rm -rf .git
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: VulnPatch-main-${{ github.sha }}
+          path: .
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
