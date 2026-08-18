@@ -41,7 +41,11 @@ class LegacyGraphAdapter:
 
         if isinstance(source, (str, bytes)):
             raise TypeError("vulnerability graph input must be findings, not text")
-        if isinstance(source, dict) or not isinstance(source, Iterable):
+        if (
+            isinstance(source, dict)
+            or callable(getattr(source, "model_dump", None))
+            or not isinstance(source, Iterable)
+        ):
             source = [source]
 
         normalized: list[dict[str, Any]] = []
