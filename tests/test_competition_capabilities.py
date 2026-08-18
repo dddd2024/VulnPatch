@@ -1,5 +1,7 @@
 from pathlib import Path
+from types import SimpleNamespace
 
+import agents.verification_agent as verification_module
 from audit_core.models import CodeUnit
 from audit_core.registry import build_default_registry
 from agents.repair_agent import RepairAgent
@@ -152,3 +154,64 @@ def test_verified_cases_change_rule_engine_repair_decision():
     assert guided.metadata["case_policy"]["selected_case_id"] == positive.case_id
     assert "string replace ../" in guided.metadata["case_policy"]["blocked_strategies"]
     assert "string replace" not in guided.strategy.lower()
+
+
+def test_path_verifier_rejects_ignored_startswith_guard():
+    import json
+
+    path = ROOT / "demo" / "path_evolution" / "VulnerableDownload.java"
+    vectors = json.loads((ROOT / "demo" / "path_evolution" / "traversal_vectors.json").read_text(encoding="utf-8"))
+    unit, finding = _finding_for(path)
+    insecure = unit.content.replace(
+        "File target = new File(base.toFile(), filename); // VULNERABLE_PATH\n        return target.toPath();",
+        "Path target = base.resolve(filename).normalize();\n"
+        "        target.startsWith(base.normalize()); // ignored result\n"
+        "        return target;",
+    )
+    patch = SimpleNamespace(patch_id="patch-ignored-startswith", patched_code=insecure)
+    verifier = VerificationAgent()
+
+    assert verifier._path_policy(insecure) == "unprotected"
+    result, _ = verifier.run(
+        finding=finding,
+        code_unit=unit,
+        patch=patch,
+        traversal_vectors=vectors,
+    )
+    assert result.passed is False
+    assert any(
+        check.name in {"poc", "anti_bypass"} and check.status == "fail"
+        for check in result.checks
+    )
+
+
+def test_static_rescan_fails_closed_when_analyzer_raises(monkeypatch):
+    path = ROOT / "demo" / "path_evolution" / "VulnerableDownload.java"
+    unit, finding = _finding_for(path)
+
+    class RaisingAnalyzer:
+        name = "raising-analyzer"
+
+        def analyze(self, units):
+            raise RuntimeError("synthetic analyzer failure")
+
+    class RaisingRegistry:
+        def get_analyzers(self):
+            return [RaisingAnalyzer()]
+
+    monkeypatch.setattr(
+        verification_module,
+        "build_default_registry",
+        lambda: RaisingRegistry(),
+    )
+
+    check = VerificationAgent._static_rescan(
+        finding,
+        unit,
+        unit.content,
+    )
+    assert check.passed is False
+    assert check.status == "skipped"
+    assert "not accepted as verification evidence" in check.details
+    assert check.metadata["completed_analyzers"] == 0
+    assert check.metadata["analyzer_errors"][0]["analyzer"] == "raising-analyzer"
