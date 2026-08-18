@@ -59,7 +59,13 @@ def _case_stats() -> dict[str, int]:
     negative = sum(case.outcome == "NEGATIVE" for case in cases)
     demo = sum(bool(case.metadata.get("demo")) for case in cases)
     high_trust = sum(case.trust_score >= 0.80 for case in cases)
-    return {"total": len(cases), "positive": positive, "negative": negative, "high_trust": high_trust, "demo_created": demo}
+    return {
+        "total": len(cases),
+        "positive": positive,
+        "negative": negative,
+        "high_trust": high_trust,
+        "demo_created": demo,
+    }
 
 
 def _load_scenario(name: str) -> CodeUnit:
@@ -94,7 +100,19 @@ def _routing_context(request: CompetitionDemoRequest, finding: RawFinding, unit:
     else:
         complexity = "high"
         capabilities = ["code_reasoning", "patch_generation", "anti_bypass"]
-    return RoutingContext(finding_id=finding.id, cwe=finding.cwe, vulnerability_type=finding.type, language=unit.language, complexity=complexity, confidence=_confidence(finding.confidence), sensitivity=request.sensitivity, file_count=1, cross_file=False, required_capabilities=capabilities, metadata={"scenario": request.scenario, "competition_demo": True})
+    return RoutingContext(
+        finding_id=finding.id,
+        cwe=finding.cwe,
+        vulnerability_type=finding.type,
+        language=unit.language,
+        complexity=complexity,
+        confidence=_confidence(finding.confidence),
+        sensitivity=request.sensitivity,
+        file_count=1,
+        cross_file=False,
+        required_capabilities=capabilities,
+        metadata={"scenario": request.scenario, "competition_demo": True},
+    )
 
 
 def _load_traversal_vectors() -> dict[str, list[str]]:
@@ -105,6 +123,9 @@ def _load_traversal_vectors() -> dict[str, list[str]]:
 def _recorded_response(unit: CodeUnit, finding: RawFinding) -> dict[str, Any]:
     path = DEMO_ROOT / "recorded_responses" / "safe_path_patch.json"
     data = json.loads(path.read_text(encoding="utf-8"))
+    # The recording intentionally stores model-level fields only. Reconstruct
+    # the recorded code candidate from the deterministic fixture so no stale
+    # source text can silently drift from the checked-in demo source.
     patched, strategy, reason = _repair._rule_patch(finding, unit, variant="auto")
     data.setdefault("patched_code", patched)
     data.setdefault("strategy", strategy)
@@ -117,25 +138,86 @@ def _event_dicts(limit: int = 50) -> list[dict[str, Any]]:
 
 
 def run_demo_pipeline(request: CompetitionDemoRequest) -> dict[str, Any]:
+    """Execute one complete, auditable demo iteration (also used by tests)."""
     _ensure_seed_cases()
     run_id = f"demo-{uuid.uuid4().hex[:10]}"
     unit = _load_scenario(request.scenario)
     finding = _find_primary_finding(unit)
+
     decision = _model_router.select(_routing_context(request, finding, unit))
     if request.simulate_provider_failure and decision.selected_provider != "rule_engine":
         failed = decision.selected_provider
         _model_router.record_failure(decision, failed, "SIMULATED_COMPETITION_FAILURE")
         decision.metadata["simulated_failure"] = True
         decision.metadata["simulated_failed_provider"] = failed
-        decision.fallback_chain = [p for p in decision.fallback_chain if p != failed] or ["rule_engine"]
-    matches = _retriever.retrieve(finding, language=unit.language, code=unit.content, top_k=6, scan_id=run_id, record_events=True)
+        decision.fallback_chain = [p for p in decision.fallback_chain if p != failed]
+        if not decision.fallback_chain:
+            decision.fallback_chain = ["rule_engine"]
+
+    matches = _retriever.retrieve(
+        finding,
+        language=unit.language,
+        code=unit.content,
+        top_k=6,
+        scan_id=run_id,
+        record_events=True,
+    )
+
     replay = _recorded_response(unit, finding) if request.mode == "replay" else None
-    patch = _repair.generate(finding=finding, code_unit=unit, decision=decision, historical_matches=matches, variant=request.repair_variant, recorded_response=replay)
-    verification, verification_log = _verifier.run(finding=finding, code_unit=unit, patch=patch, traversal_vectors=_load_traversal_vectors())
-    case = _evolver.evolve(finding=finding, code_unit=unit, patch=patch, verification=verification, scan_id=run_id, evidence_refs=[decision.decision_id, verification.verification_id], framework="JDBC" if (finding.cwe or "").upper() == "CWE-89" else "generic", metadata={"demo": True, "scenario": request.scenario, "mode": request.mode, "repair_variant": request.repair_variant, "routing_decision_id": decision.decision_id})
+    patch = _repair.generate(
+        finding=finding,
+        code_unit=unit,
+        decision=decision,
+        historical_matches=matches,
+        variant=request.repair_variant,
+        recorded_response=replay,
+    )
+
+    verification, verification_log = _verifier.run(
+        finding=finding,
+        code_unit=unit,
+        patch=patch,
+        traversal_vectors=_load_traversal_vectors(),
+    )
+    case = _evolver.evolve(
+        finding=finding,
+        code_unit=unit,
+        patch=patch,
+        verification=verification,
+        scan_id=run_id,
+        evidence_refs=[decision.decision_id, verification.verification_id],
+        framework="JDBC" if (finding.cwe or "").upper() == "CWE-89" else "generic",
+        metadata={
+            "demo": True,
+            "scenario": request.scenario,
+            "mode": request.mode,
+            "repair_variant": request.repair_variant,
+            "routing_decision_id": decision.decision_id,
+        },
+    )
+
     for match in matches:
-        _store.mark_reuse_result(match.case.case_id, success=verification.passed, scan_id=run_id, metadata={"patch_id": patch.patch_id, "new_case_id": case.case_id})
-    result = {"run_id": run_id, "scenario": request.scenario, "mode": request.mode, "finding": finding.model_dump(mode="json"), "routing_decision": decision.model_dump(mode="json"), "historical_matches": [match.model_dump(mode="json") for match in matches], "patch": patch.model_dump(mode="json"), "verification": verification.model_dump(mode="json"), "verification_log": verification_log.model_dump(mode="json"), "evolved_case": case.model_dump(mode="json"), "case_stats": _case_stats(), "events": _event_dicts()}
+        _store.mark_reuse_result(
+            match.case.case_id,
+            success=verification.passed,
+            scan_id=run_id,
+            metadata={"patch_id": patch.patch_id, "new_case_id": case.case_id},
+        )
+
+    result = {
+        "run_id": run_id,
+        "scenario": request.scenario,
+        "mode": request.mode,
+        "finding": finding.model_dump(mode="json"),
+        "routing_decision": decision.model_dump(mode="json"),
+        "historical_matches": [match.model_dump(mode="json") for match in matches],
+        "patch": patch.model_dump(mode="json"),
+        "verification": verification.model_dump(mode="json"),
+        "verification_log": verification_log.model_dump(mode="json"),
+        "evolved_case": case.model_dump(mode="json"),
+        "case_stats": _case_stats(),
+        "events": _event_dicts(),
+    }
     _recent_runs.insert(0, result)
     del _recent_runs[25:]
     return result
@@ -143,7 +225,8 @@ def run_demo_pipeline(request: CompetitionDemoRequest) -> dict[str, Any]:
 
 @router.post("/demo/run", response_model=CompetitionDemoResponse)
 def run_demo(request: CompetitionDemoRequest) -> CompetitionDemoResponse:
-    return CompetitionDemoResponse(**run_demo_pipeline(request))
+    result = run_demo_pipeline(request)
+    return CompetitionDemoResponse(**result)
 
 
 @router.post("/demo/reset")
@@ -160,7 +243,11 @@ def reset_demo() -> dict[str, Any]:
 @router.get("/demo/state")
 def demo_state() -> dict[str, Any]:
     _ensure_seed_cases()
-    return {"case_stats": _case_stats(), "latest_run": _recent_runs[0] if _recent_runs else None, "events": _event_dicts()}
+    return {
+        "case_stats": _case_stats(),
+        "latest_run": _recent_runs[0] if _recent_runs else None,
+        "events": _event_dicts(),
+    }
 
 
 @router.get("/routing/decisions")
@@ -170,11 +257,22 @@ def routing_decisions(limit: int = Query(20, ge=1, le=100)) -> list[dict[str, An
 
 @router.get("/models/health")
 def model_health() -> list[dict[str, Any]]:
-    return [{**profile.model_dump(mode="json"), "available": _model_router._provider_available(profile), "health": _model_router.health(profile.provider)} for profile in _model_router.profiles()]
+    result = []
+    for profile in _model_router.profiles():
+        result.append({
+            **profile.model_dump(mode="json"),
+            "available": _model_router._provider_available(profile),
+            "health": _model_router.health(profile.provider),
+        })
+    return result
 
 
 @router.get("/cases")
-def cases(cwe: str | None = None, outcome: str | None = None, limit: int = Query(200, ge=1, le=1000)) -> list[dict[str, Any]]:
+def cases(
+    cwe: str | None = None,
+    outcome: str | None = None,
+    limit: int = Query(200, ge=1, le=1000),
+) -> list[dict[str, Any]]:
     _ensure_seed_cases()
     return [case.model_dump(mode="json") for case in _store.list_cases(cwe=cwe, outcome=outcome, limit=limit)]
 
@@ -188,4 +286,7 @@ def case_events(limit: int = Query(200, ge=1, le=1000)) -> list[dict[str, Any]]:
 @router.get("/cases/retrievals")
 def case_retrievals(limit: int = Query(200, ge=1, le=1000)) -> list[dict[str, Any]]:
     _ensure_seed_cases()
-    return [event.model_dump(mode="json") for event in _store.list_events(event_type="CASE_RETRIEVED", limit=limit)]
+    return [
+        event.model_dump(mode="json")
+        for event in _store.list_events(event_type="CASE_RETRIEVED", limit=limit)
+    ]

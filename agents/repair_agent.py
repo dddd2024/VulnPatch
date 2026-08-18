@@ -77,6 +77,7 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
                 return data
         except json.JSONDecodeError:
             pass
+        # Last-resort extraction of the first JSON object.
         start = text.find("{")
         end = text.rfind("}")
         if start >= 0 and end > start:
@@ -85,7 +86,12 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
                 return data
         raise ValueError("LLM repair response is not a JSON object")
 
-    def _build_prompt(self, finding: RawFinding, code_unit: CodeUnit, matches: list[CaseMatch]) -> str:
+    def _build_prompt(
+        self,
+        finding: RawFinding,
+        code_unit: CodeUnit,
+        matches: list[CaseMatch],
+    ) -> str:
         historical = CaseRetriever.format_prompt_context(matches)
         return "\n".join([
             "## Vulnerability repair task",
@@ -106,6 +112,8 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
 
     @staticmethod
     def _path_traversal_safe_patch(code: str) -> tuple[str, str, str]:
+        """Deterministic offline patch for the self-contained competition fixture."""
+        # Replace the vulnerable helper when the demo fixture marker is present.
         if "File target = new File(base.toFile(), filename); // VULNERABLE_PATH" in code:
             patched = code.replace(
                 "File target = new File(base.toFile(), filename); // VULNERABLE_PATH\n        return target.toPath();",
@@ -115,10 +123,17 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
                 "        }\n"
                 "        return target;",
             )
-            return patched, "normalize + base-directory containment", "Normalize the resolved path and reject targets outside the configured base directory."
+            return (
+                patched,
+                "normalize + base-directory containment",
+                "Normalize the resolved path and reject targets outside the configured base directory.",
+            )
+
+        # Generic textual fallback: useful for source snippets that already use Path.
         if "base.resolve(" in code and ".normalize()" not in code:
             patched = code.replace("base.resolve(filename)", "base.resolve(filename).normalize()")
             return patched, "normalize resolved path", "Normalize the user-controlled path before file access."
+
         return code, "manual review required", "No deterministic path-traversal rewrite matched the source shape."
 
     @staticmethod
@@ -129,11 +144,16 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
                 "filename = filename.replace(\"../\", \"\");\n"
                 "        return base.resolve(filename); // WEAK_TRAVERSAL_FILTER",
             )
-            return patched, "string replace ../", "Demonstration candidate: removes a literal traversal token but is expected to fail anti-bypass verification."
+            return (
+                patched,
+                "string replace ../",
+                "Demonstration candidate: removes a literal traversal token but is expected to fail anti-bypass verification.",
+            )
         return code, "string replace ../", "Weak demonstration strategy could not be applied to this source shape."
 
     @staticmethod
     def _sql_safe_patch(code: str) -> tuple[str, str, str]:
+        # Fixture-aware Java transformation.
         if "Statement stmt = conn.createStatement();" in code and "VULNERABLE_SQL" in code:
             patched = code.replace(
                 "Statement stmt = conn.createStatement();\n        String sql = \"SELECT * FROM users WHERE id=\" + userId; // VULNERABLE_SQL\n        return stmt.executeQuery(sql);",
@@ -155,39 +175,129 @@ unless your patch explicitly fixes the documented failure mode. Do not include m
             return self._sql_safe_patch(code_unit.content)
         return code_unit.content, "manual review required", "No deterministic repair template exists for this finding type."
 
-    def generate(self, *, finding: RawFinding, code_unit: CodeUnit, decision: RoutingDecision, historical_matches: list[CaseMatch] | None = None, variant: str = "auto", recorded_response: dict[str, Any] | None = None) -> PatchCandidate:
+    def generate(
+        self,
+        *,
+        finding: RawFinding,
+        code_unit: CodeUnit,
+        decision: RoutingDecision,
+        historical_matches: list[CaseMatch] | None = None,
+        variant: str = "auto",
+        recorded_response: dict[str, Any] | None = None,
+    ) -> PatchCandidate:
         matches = list(historical_matches or [])
         used, avoided = self._history_ids(matches)
+
+        # Explicit demo weak variant is deterministic and visibly labelled by the
+        # API/UI.  It is never presented as an autonomous model output.
         if variant in {"weak", "safe"}:
             applied_variant = "weak" if variant == "weak" else "auto"
             patched, strategy, reason = self._rule_patch(finding, code_unit, variant=applied_variant)
             self.router.record_execution(decision, "rule_engine")
-            return PatchCandidate(provider="rule_engine", model="deterministic-security-rules", strategy=strategy, patched_code=patched, diff=self._diff(code_unit.content, patched, code_unit.path), reason=reason, historical_cases_used=used, historical_cases_avoided=avoided, routing_decision_id=decision.decision_id, fallback_path=list(decision.execution_path), metadata={"variant": variant, "demo_candidate": True, "explicit_deterministic_candidate": True})
+            return PatchCandidate(
+                provider="rule_engine",
+                model="deterministic-security-rules",
+                strategy=strategy,
+                patched_code=patched,
+                diff=self._diff(code_unit.content, patched, code_unit.path),
+                reason=reason,
+                historical_cases_used=used,
+                historical_cases_avoided=avoided,
+                routing_decision_id=decision.decision_id,
+                fallback_path=list(decision.execution_path),
+                metadata={
+                    "variant": variant,
+                    "demo_candidate": True,
+                    "explicit_deterministic_candidate": True,
+                },
+            )
+
         if recorded_response is not None:
             provider = str(recorded_response.get("provider", "replay"))
             patched = str(recorded_response.get("patched_code", code_unit.content))
             strategy = str(recorded_response.get("strategy", "recorded repair"))
             reason = str(recorded_response.get("reason", "Recorded model response"))
-            return PatchCandidate(provider=provider, model=recorded_response.get("model"), strategy=strategy, patched_code=patched, diff=self._diff(code_unit.content, patched, code_unit.path), reason=reason, historical_cases_used=used, historical_cases_avoided=avoided, routing_decision_id=decision.decision_id, fallback_path=[provider], metadata={"replay": True})
+            return PatchCandidate(
+                provider=provider,
+                model=recorded_response.get("model"),
+                strategy=strategy,
+                patched_code=patched,
+                diff=self._diff(code_unit.content, patched, code_unit.path),
+                reason=reason,
+                historical_cases_used=used,
+                historical_cases_avoided=avoided,
+                routing_decision_id=decision.decision_id,
+                fallback_path=[provider],
+                metadata={"replay": True},
+            )
+
         prompt = self._build_prompt(finding, code_unit, matches)
         provider_to_model = {candidate.provider: candidate.model for candidate in decision.candidates}
+
         for provider in decision.fallback_chain:
             self.router.record_execution(decision, provider)
             if provider == "rule_engine":
                 patched, strategy, reason = self._rule_patch(finding, code_unit, variant="auto")
-                return PatchCandidate(provider=provider, model=provider_to_model.get(provider), strategy=strategy, patched_code=patched, diff=self._diff(code_unit.content, patched, code_unit.path), reason=reason, historical_cases_used=used, historical_cases_avoided=avoided, routing_decision_id=decision.decision_id, fallback_path=list(decision.execution_path))
+                return PatchCandidate(
+                    provider=provider,
+                    model=provider_to_model.get(provider),
+                    strategy=strategy,
+                    patched_code=patched,
+                    diff=self._diff(code_unit.content, patched, code_unit.path),
+                    reason=reason,
+                    historical_cases_used=used,
+                    historical_cases_avoided=avoided,
+                    routing_decision_id=decision.decision_id,
+                    fallback_path=list(decision.execution_path),
+                )
+
             try:
                 client = self.router.build_client(provider, provider_to_model.get(provider))
-                response = client.generate(prompt, system_prompt=self.SYSTEM_PROMPT, temperature=0.1, max_tokens=4096)
+                response = client.generate(
+                    prompt,
+                    system_prompt=self.SYSTEM_PROMPT,
+                    temperature=0.1,
+                    max_tokens=4096,
+                )
                 if not response.success or not response.content:
                     raise RuntimeError(response.error or "empty LLM response")
                 data = self._parse_json_response(response.content)
                 patched = str(data.get("patched_code") or "")
                 if not patched:
                     raise ValueError("LLM response did not contain patched_code")
-                return PatchCandidate(provider=provider, model=response.model or provider_to_model.get(provider), strategy=str(data.get("strategy") or "model-generated repair"), patched_code=patched, diff=self._diff(code_unit.content, patched, code_unit.path), reason=str(data.get("reason") or ""), historical_cases_used=used, historical_cases_avoided=avoided, routing_decision_id=decision.decision_id, fallback_path=list(decision.execution_path), metadata={"tokens_used": response.tokens_used, "latency_ms": response.latency_ms})
+                return PatchCandidate(
+                    provider=provider,
+                    model=response.model or provider_to_model.get(provider),
+                    strategy=str(data.get("strategy") or "model-generated repair"),
+                    patched_code=patched,
+                    diff=self._diff(code_unit.content, patched, code_unit.path),
+                    reason=str(data.get("reason") or ""),
+                    historical_cases_used=used,
+                    historical_cases_avoided=avoided,
+                    routing_decision_id=decision.decision_id,
+                    fallback_path=list(decision.execution_path),
+                    metadata={
+                        "tokens_used": response.tokens_used,
+                        "latency_ms": response.latency_ms,
+                    },
+                )
             except Exception as exc:
                 self.router.record_failure(decision, provider, str(exc))
                 continue
+
+        # Should be unreachable because rule_engine is the emergency fallback,
+        # but make the failure explicit rather than returning an unstructured error.
         patched, strategy, reason = self._rule_patch(finding, code_unit, variant="auto")
-        return PatchCandidate(provider="rule_engine", model="deterministic-security-rules", strategy=strategy, patched_code=patched, diff=self._diff(code_unit.content, patched, code_unit.path), reason=reason, historical_cases_used=used, historical_cases_avoided=avoided, routing_decision_id=decision.decision_id, fallback_path=list(decision.execution_path) + ["rule_engine"], metadata={"emergency_fallback": True})
+        return PatchCandidate(
+            provider="rule_engine",
+            model="deterministic-security-rules",
+            strategy=strategy,
+            patched_code=patched,
+            diff=self._diff(code_unit.content, patched, code_unit.path),
+            reason=reason,
+            historical_cases_used=used,
+            historical_cases_avoided=avoided,
+            routing_decision_id=decision.decision_id,
+            fallback_path=list(decision.execution_path) + ["rule_engine"],
+            metadata={"emergency_fallback": True},
+        )

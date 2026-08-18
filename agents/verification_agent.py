@@ -98,6 +98,7 @@ class VerificationAgent:
                         if same_cwe or same_type:
                             residual.append(candidate)
                 except Exception:
+                    # A failing optional analyzer should not fabricate evidence.
                     continue
         except Exception as exc:
             return VerificationCheck(name="static_rescan", status="skipped", passed=False, details=f"rescan unavailable: {exc}")
@@ -127,7 +128,13 @@ class VerificationAgent:
         return "unprotected"
 
     @classmethod
-    def _path_security_checks(cls, patched_code: str, *, blocked_vectors: list[str], allowed_vectors: list[str]) -> list[VerificationCheck]:
+    def _path_security_checks(
+        cls,
+        patched_code: str,
+        *,
+        blocked_vectors: list[str],
+        allowed_vectors: list[str],
+    ) -> list[VerificationCheck]:
         policy = cls._path_policy(patched_code)
 
         def blocked(vector: str) -> bool:
@@ -143,20 +150,32 @@ class VerificationAgent:
             name="poc",
             status="fail" if failing_attack else "pass",
             passed=failing_attack is None,
-            details=f"Traversal vector bypassed patch: {failing_attack}" if failing_attack else f"All {len(blocked_vectors)} traversal PoC vectors were blocked",
+            details=(
+                f"Traversal vector bypassed patch: {failing_attack}"
+                if failing_attack else
+                f"All {len(blocked_vectors)} traversal PoC vectors were blocked"
+            ),
             input=failing_attack,
             metadata={"policy": policy, "vectors": blocked_vectors},
         )
+
         anti_vectors = [v for v in blocked_vectors if "...." in v or "\\" in v or "/../" in v]
         failing_bypass = next((vector for vector in anti_vectors if not blocked(vector)), None)
         anti = VerificationCheck(
             name="anti_bypass",
             status="fail" if failing_bypass else "pass",
             passed=failing_bypass is None,
-            details=f"Anti-bypass vector succeeded: {failing_bypass}" if failing_bypass else f"All {len(anti_vectors)} encoded/nested/platform traversal variants were blocked",
+            details=(
+                f"Anti-bypass vector succeeded: {failing_bypass}"
+                if failing_bypass else
+                f"All {len(anti_vectors)} encoded/nested/platform traversal variants were blocked"
+            ),
             input=failing_bypass,
             metadata={"policy": policy, "vectors": anti_vectors},
         )
+
+        # Current path policies do not reject normal relative filenames; keep the
+        # check explicit so evolution trust is grounded in regression evidence.
         regression_ok = policy in {"containment", "weak_replace", "unprotected"} and bool(allowed_vectors)
         regression = VerificationCheck(
             name="regression",
@@ -170,31 +189,95 @@ class VerificationAgent:
     @staticmethod
     def _sql_security_checks(patched_code: str) -> list[VerificationCheck]:
         lower = patched_code.lower()
-        parameterized = "preparestatement(" in lower or "preparedstatement" in lower or "?" in patched_code and "setstring(" in lower
+        parameterized = (
+            "preparestatement(" in lower
+            or "preparedstatement" in lower
+            or "?" in patched_code and "setstring(" in lower
+        )
         concatenated_sql = bool(re.search(r"(?:select|insert|update|delete)[^\n]*[+][^\n]*(?:userid|request|param|input)", lower))
         secure = parameterized and not concatenated_sql
         return [
-            VerificationCheck(name="poc", status="pass" if secure else "fail", passed=secure, details="User-controlled SQL value is bound as a parameter" if secure else "SQL concatenation/absence of parameter binding remains"),
-            VerificationCheck(name="regression", status="pass" if parameterized else "fail", passed=parameterized, details="Prepared statement still executes the intended lookup" if parameterized else "No executable parameterized query identified"),
-            VerificationCheck(name="anti_bypass", status="pass" if secure else "fail", passed=secure, details="Quote/comment payloads are data parameters, not SQL syntax" if secure else "Injection bypass resistance not established"),
+            VerificationCheck(
+                name="poc",
+                status="pass" if secure else "fail",
+                passed=secure,
+                details="User-controlled SQL value is bound as a parameter" if secure else "SQL concatenation/absence of parameter binding remains",
+            ),
+            VerificationCheck(
+                name="regression",
+                status="pass" if parameterized else "fail",
+                passed=parameterized,
+                details="Prepared statement still executes the intended lookup" if parameterized else "No executable parameterized query identified",
+            ),
+            VerificationCheck(
+                name="anti_bypass",
+                status="pass" if secure else "fail",
+                passed=secure,
+                details="Quote/comment payloads are data parameters, not SQL syntax" if secure else "Injection bypass resistance not established",
+            ),
         ]
 
-    def run(self, *, finding: RawFinding, code_unit: CodeUnit, patch: Any, traversal_vectors: dict[str, list[str]] | None = None) -> tuple[VerificationResult, AgentLog]:
+    def run(
+        self,
+        *,
+        finding: RawFinding,
+        code_unit: CodeUnit,
+        patch: Any,
+        traversal_vectors: dict[str, list[str]] | None = None,
+    ) -> tuple[VerificationResult, AgentLog]:
         patched_code = str(getattr(patch, "patched_code", ""))
-        checks: list[VerificationCheck] = [self._syntax_or_compile(code_unit, patched_code), self._static_rescan(finding, code_unit, patched_code)]
+        checks: list[VerificationCheck] = [
+            self._syntax_or_compile(code_unit, patched_code),
+            self._static_rescan(finding, code_unit, patched_code),
+        ]
+
         cwe = (finding.cwe or "").upper()
         kind = finding.type.lower().replace(" ", "_")
         if cwe == "CWE-22" or "path" in kind:
             vectors = traversal_vectors or {}
-            checks.extend(self._path_security_checks(patched_code, blocked_vectors=list(vectors.get("blocked") or self.DEFAULT_TRAVERSAL_BLOCKED), allowed_vectors=list(vectors.get("allowed") or self.DEFAULT_TRAVERSAL_ALLOWED)))
+            checks.extend(self._path_security_checks(
+                patched_code,
+                blocked_vectors=list(vectors.get("blocked") or self.DEFAULT_TRAVERSAL_BLOCKED),
+                allowed_vectors=list(vectors.get("allowed") or self.DEFAULT_TRAVERSAL_ALLOWED),
+            ))
         elif cwe == "CWE-89" or "sql" in kind:
             checks.extend(self._sql_security_checks(patched_code))
         else:
-            checks.append(VerificationCheck(name="poc", status="skipped", passed=False, details="No CWE-specific PoC verifier is registered for this vulnerability type"))
+            checks.append(VerificationCheck(
+                name="poc",
+                status="skipped",
+                passed=False,
+                details="No CWE-specific PoC verifier is registered for this vulnerability type",
+            ))
+
         required = ["static_rescan", "poc", "regression", "anti_bypass"]
         by_name = {check.name: check for check in checks}
         passed = all(name in by_name and by_name[name].status == "pass" for name in required)
-        passed = passed and not any(check.name in {"compile", "syntax"} and check.status == "fail" for check in checks)
-        result = VerificationResult(passed=passed, checks=checks, required_checks=required, metadata={"finding_id": finding.id, "patch_id": getattr(patch, "patch_id", None), "verification_method": "deterministic"})
-        log = AgentLog(agent_name=self.name, stage="verification", message=f"Patch verification {'passed' if passed else 'failed'} ({sum(c.status == 'pass' for c in checks)}/{len(checks)} checks pass)", input_refs=[finding.id, str(getattr(patch, "patch_id", ""))], output_refs=[result.verification_id], metadata={"passed": passed, "checks": [check.model_dump(mode="json") for check in checks]})
+        # Compile/syntax, when actually executed, must not fail.
+        passed = passed and not any(
+            check.name in {"compile", "syntax"} and check.status == "fail"
+            for check in checks
+        )
+
+        result = VerificationResult(
+            passed=passed,
+            checks=checks,
+            required_checks=required,
+            metadata={
+                "finding_id": finding.id,
+                "patch_id": getattr(patch, "patch_id", None),
+                "verification_method": "deterministic",
+            },
+        )
+        log = AgentLog(
+            agent_name=self.name,
+            stage="verification",
+            message=f"Patch verification {'passed' if passed else 'failed'} ({sum(c.status == 'pass' for c in checks)}/{len(checks)} checks pass)",
+            input_refs=[finding.id, str(getattr(patch, "patch_id", ""))],
+            output_refs=[result.verification_id],
+            metadata={
+                "passed": passed,
+                "checks": [check.model_dump(mode="json") for check in checks],
+            },
+        )
         return result, log
