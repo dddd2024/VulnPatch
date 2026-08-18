@@ -13,7 +13,7 @@ providers:
     capability: 0.48
     cost: 0.00
     latency: 0.05
-    capabilities: [pattern_fix, deterministic_fix, offline]
+    capabilities: [pattern_fix, deterministic_fix, patch_generation, offline]
 
   ollama:
     model: qwen2.5-coder:7b
